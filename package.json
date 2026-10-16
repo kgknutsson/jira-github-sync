@@ -1,0 +1,25 @@
+{
+  "name": "@kgk/jira-github-sync",
+  "version": "1.0.0",
+  "description": "Portable GitHub Actions runner for Jira issue status sync (bundled ESM, copy into any repo)",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kgknutsson/jira-github-sync.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "verify": "node dist/verify.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "qa": "node build.mjs && vitest run && node dist/verify.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.9",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,96 @@
+# Copy to your app repo as .github/workflows/jira-sync.yml
+# When vendoring this package under .github/workflows/jira-sync/, use:
+#   run: node .github/workflows/jira-sync/dist/run.mjs
+#
+# When using this repo as a submodule at repo root, use:
+#   run: node dist/run.mjs
+#
+# Requires secrets: JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN
+name: 'Jira Sync'
+
+on:
+  pull_request:
+    types:
+      [
+        opened,
+        reopened,
+        ready_for_review,
+        synchronize,
+        edited,
+        converted_to_draft,
+        closed,
+        labeled,
+        unlabeled,
+        review_requested,
+        assigned,
+        auto_merge_enabled,
+      ]
+    branches:
+      - dev
+      - test
+      - main
+  pull_request_review:
+    types: [submitted, dismissed, edited]
+  workflow_run:
+    workflows: ['Quality Gate', 'Deploy']
+    types: [completed]
+  check_suite:
+    types: [completed]
+  check_run:
+    types: [completed]
+  issue_comment:
+    types: [created, edited]
+  push:
+    branches:
+      - dev
+      - test
+      - main
+  release:
+    types: [published]
+  merge_group:
+    types: [checks_requested, destroyed]
+  deployment_status:
+
+concurrency:
+  group: jira-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.workflow_run.id || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  checks: read
+  deployments: read
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  jira-sync:
+    name: 'Jira Sync'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >
+      (github.event_name != 'pull_request_review' ||
+        github.event.pull_request.base.ref == 'dev' ||
+        github.event.pull_request.base.ref == 'test' ||
+        github.event.pull_request.base.ref == 'main') &&
+      (github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.repository.id == github.repository_id &&
+          github.event.workflow_run.head_repository.id == github.repository_id))
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run Jira sync
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: node .github/workflows/jira-sync/dist/run.mjs
