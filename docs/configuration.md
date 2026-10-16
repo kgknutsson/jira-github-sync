@@ -304,6 +304,6 @@ Before syncing, the action compares the workflow file that runs it with your rul
 It also fails when a `deployToJiraStatus` rule has no usable `deploy` map. Run it with `validate-only: true`, or locally:
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.1.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.2.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 # add --preflight with JIRA_BASE_URL, JIRA_USER_EMAIL and JIRA_API_TOKEN set to check status names in Jira
 ```

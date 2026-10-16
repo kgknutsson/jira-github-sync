@@ -7402,11 +7402,20 @@ var CREDENTIAL_VARS = ["JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_API_TOKEN"];
 function missingJiraCredentials() {
   return CREDENTIAL_VARS.filter((name) => !process.env[name]?.trim());
 }
+function normalizeBaseUrl(raw) {
+  const trimmed = raw.replace(/\/+$/, "");
+  try {
+    const url = new URL(trimmed);
+    if (url.hostname.endsWith(".atlassian.net")) return url.origin;
+  } catch {
+  }
+  return trimmed;
+}
 function readJiraConfigFromEnv() {
   if (missingJiraCredentials().length > 0) return null;
   const value = (name) => (process.env[name] ?? "").trim();
   return {
-    baseUrl: value("JIRA_BASE_URL").replace(/\/+$/, ""),
+    baseUrl: normalizeBaseUrl(value("JIRA_BASE_URL")),
     email: value("JIRA_USER_EMAIL"),
     apiToken: value("JIRA_API_TOKEN")
   };
@@ -7461,6 +7470,21 @@ async function verifyJiraConnection(config) {
     throw new JiraApiError(500, "Jira auth check returned no accountId");
   }
   return { accountId: data.accountId };
+}
+async function explainIssueNotFound(config, issueKey) {
+  let res;
+  try {
+    res = await jiraFetch(config, "/rest/api/3/myself");
+  } catch {
+    return "JIRA_BASE_URL could not be reached.";
+  }
+  if (res.status === 401 || res.status === 403) {
+    return `Jira rejected the login (HTTP ${res.status}): check JIRA_USER_EMAIL and JIRA_API_TOKEN. An API token with scopes needs JIRA_BASE_URL https://api.atlassian.com/ex/jira/<cloudId>.`;
+  }
+  if (!res.ok || !res.headers.get("content-type")?.includes("json")) {
+    return `JIRA_BASE_URL is not a Jira Cloud site (/rest/api/3/myself answered HTTP ${res.status}); use the site root, e.g. https://your-site.atlassian.net.`;
+  }
+  return `${issueKey} does not exist, or the Jira account cannot browse its project.`;
 }
 async function getIssueStatusName(config, issueKey) {
   const res = await jiraFetch(
@@ -9446,7 +9470,7 @@ async function syncOneIssue(compiled, ctx, jira, issueKey) {
     jiraStatus = await getIssueStatusName(jira, issueKey);
   } catch (err) {
     if (err instanceof JiraIssueNotFoundError) {
-      log.info(`Issue ${issueKey} not found in Jira; skipping`);
+      log.annotate("warning", `${issueKey} not updated: Jira answered 404. ${await explainIssueNotFound(jira, issueKey)}`);
       return;
     }
     throw err;

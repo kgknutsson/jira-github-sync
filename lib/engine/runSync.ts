@@ -11,6 +11,7 @@ import {
   readGitHubAuthFromEnv,
 } from '../adapters/github/api';
 import {
+  explainIssueNotFound,
   getIssueStatusName,
   JiraIssueNotFoundError,
   missingJiraCredentials,
@@ -211,7 +212,7 @@ async function syncOneIssue(
     jiraStatus = await getIssueStatusName(jira, issueKey);
   } catch (err) {
     if (err instanceof JiraIssueNotFoundError) {
-      log.info(`Issue ${issueKey} not found in Jira; skipping`);
+      log.annotate('warning', `${issueKey} not updated: Jira answered 404. ${await explainIssueNotFound(jira, issueKey)}`);
       return;
     }
     throw err;

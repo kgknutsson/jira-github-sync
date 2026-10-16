@@ -44,13 +44,25 @@ export function missingJiraCredentials(): string[] {
   return CREDENTIAL_VARS.filter((name) => !process.env[name]?.trim());
 }
 
+/** Site root for `*.atlassian.net` URLs (a pasted board or issue URL works); others lose trailing slashes. */
+function normalizeBaseUrl(raw: string): string {
+  const trimmed = raw.replace(/\/+$/, '');
+  try {
+    const url = new URL(trimmed);
+    if (url.hostname.endsWith('.atlassian.net')) return url.origin;
+  } catch {
+    // Not a URL: requests fail and report it.
+  }
+  return trimmed;
+}
+
 /** Reads Jira credentials from environment; returns `null` if any secret is missing. */
 export function readJiraConfigFromEnv(): JiraConfig | null {
   if (missingJiraCredentials().length > 0) return null;
   // Pasted secrets often end in a newline, which Jira rejects with 401.
   const value = (name: (typeof CREDENTIAL_VARS)[number]) => (process.env[name] ?? '').trim();
   return {
-    baseUrl: value('JIRA_BASE_URL').replace(/\/+$/, ''),
+    baseUrl: normalizeBaseUrl(value('JIRA_BASE_URL')),
     email: value('JIRA_USER_EMAIL'),
     apiToken: value('JIRA_API_TOKEN'),
   };
@@ -112,6 +124,29 @@ export async function verifyJiraConnection(config: JiraConfig): Promise<{ accoun
     throw new JiraApiError(500, 'Jira auth check returned no accountId');
   }
   return { accountId: data.accountId };
+}
+
+/**
+ * Why Jira answered 404 for an issue. Jira Cloud also says 404 when the login fails (the request
+ * runs anonymously) or the account cannot browse the project, so this asks `/myself` which it is.
+ */
+export async function explainIssueNotFound(config: JiraConfig, issueKey: string): Promise<string> {
+  let res: Response;
+  try {
+    res = await jiraFetch(config, '/rest/api/3/myself');
+  } catch {
+    return 'JIRA_BASE_URL could not be reached.';
+  }
+  if (res.status === 401 || res.status === 403) {
+    return (
+      `Jira rejected the login (HTTP ${res.status}): check JIRA_USER_EMAIL and JIRA_API_TOKEN. ` +
+      'An API token with scopes needs JIRA_BASE_URL https://api.atlassian.com/ex/jira/<cloudId>.'
+    );
+  }
+  if (!res.ok || !res.headers.get('content-type')?.includes('json')) {
+    return `JIRA_BASE_URL is not a Jira Cloud site (/rest/api/3/myself answered HTTP ${res.status}); use the site root, e.g. https://your-site.atlassian.net.`;
+  }
+  return `${issueKey} does not exist, or the Jira account cannot browse its project.`;
 }
 
 /** Current workflow column name for an issue, or `null` if missing. */

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2 — 2026-10-16
+
+### Fixed
+
+- A `404` for an issue is a warning that names the cause. Jira Cloud also answers `404` when the login fails or the account cannot browse the project, so the action asks `/rest/api/3/myself` and reports a rejected login, a `JIRA_BASE_URL` that is not a Jira site, or a missing issue or missing project access.
+- A `JIRA_BASE_URL` pointing at a page on `*.atlassian.net`, such as a board URL copied from the browser, uses the site root.
+
 ## 1.0.1 — 2026-10-16
 
 ### Fixed

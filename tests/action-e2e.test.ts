@@ -149,6 +149,23 @@ describe('action (dist/index.mjs)', () => {
     expect(calls).toEqual([]);
   });
 
+  it('explains a 404 for the issue in a warning', async () => {
+    const missing = {
+      ...openedPr,
+      pull_request: {
+        ...openedPr.pull_request,
+        title: 'PROJ-404 Add login',
+        head: { ...openedPr.pull_request.head, ref: 'PROJ-404_login' },
+      },
+    };
+    const { code, output } = await runAction({ GITHUB_EVENT_NAME: 'pull_request' }, missing);
+    expect(code, output).toBe(0);
+    expect(output).toContain(
+      '::warning::PROJ-404 not updated: Jira answered 404. PROJ-404 does not exist, or the Jira account cannot browse its project.'
+    );
+    expect(calls.map((c) => c.url)).toEqual(['/rest/api/3/issue/PROJ-404?fields=status', '/rest/api/3/myself']);
+  });
+
   it('does not warn about credentials when the event has no issue key', async () => {
     const keyless = {
       ...openedPr,

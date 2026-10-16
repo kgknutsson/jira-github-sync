@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runTransitionAction } from '../lib/actions/transitionAction';
 import {
   addIssueRemoteLink,
+  explainIssueNotFound,
   type JiraConfig,
   missingJiraCredentials,
   readJiraConfigFromEnv,
@@ -191,5 +192,37 @@ describe('Jira credentials', () => {
     vi.stubEnv('JIRA_API_TOKEN', '');
     expect(missingJiraCredentials()).toEqual(['JIRA_USER_EMAIL', 'JIRA_API_TOKEN']);
     expect(readJiraConfigFromEnv()).toBeNull();
+  });
+
+  it('uses the site root of a pasted Jira Cloud page URL, and keeps other paths', () => {
+    vi.stubEnv('JIRA_USER_EMAIL', 'bot@example.com');
+    vi.stubEnv('JIRA_API_TOKEN', 'token');
+    vi.stubEnv('JIRA_BASE_URL', 'https://site.atlassian.net/jira/software/projects/PROJ/boards/1');
+    expect(readJiraConfigFromEnv()?.baseUrl).toBe('https://site.atlassian.net');
+    vi.stubEnv('JIRA_BASE_URL', 'https://api.atlassian.com/ex/jira/cloud-id/');
+    expect(readJiraConfigFromEnv()?.baseUrl).toBe('https://api.atlassian.com/ex/jira/cloud-id');
+  });
+});
+
+describe('explainIssueNotFound', () => {
+  function myselfAnswers(status: number, contentType: string) {
+    vi.stubGlobal('fetch', async () => new Response('{}', { status, headers: { 'Content-Type': contentType } }));
+  }
+
+  it('blames the login when /myself is rejected', async () => {
+    myselfAnswers(401, 'application/json');
+    expect(await explainIssueNotFound(jira, 'PROJ-1')).toContain('Jira rejected the login (HTTP 401)');
+  });
+
+  it('blames the base URL when /myself is not Jira', async () => {
+    myselfAnswers(404, 'text/html');
+    expect(await explainIssueNotFound(jira, 'PROJ-1')).toContain('JIRA_BASE_URL is not a Jira Cloud site');
+  });
+
+  it('blames the key or project access when the login works', async () => {
+    myselfAnswers(200, 'application/json;charset=UTF-8');
+    expect(await explainIssueNotFound(jira, 'PROJ-1')).toBe(
+      'PROJ-1 does not exist, or the Jira account cannot browse its project.'
+    );
   });
 });

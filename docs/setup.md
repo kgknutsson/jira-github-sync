@@ -18,6 +18,8 @@ Add these as repository secrets, organization secrets shared with the repository
 | `JIRA_USER_EMAIL` | The bot account's email |
 | `JIRA_API_TOKEN` | The bot account's API token |
 
+An API token with scopes also works if `JIRA_BASE_URL` is `https://api.atlassian.com/ex/jira/<cloudId>`.
+
 Environment secrets keep the Jira token out of every other workflow in the repository, but a job only receives them when it names the environment. Add this to the job in the workflow file; `deployment: false` stops each run from appearing as a deployment on your PRs:
 
 ```yaml
@@ -49,7 +51,7 @@ Copy [templates/jira-sync.config.yml](../templates/jira-sync.config.yml) to `.gi
 Locally (Node 20+):
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.1.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.2.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
 
 Use the release your workflow runs. npx caches each URL, so a moving tag like `v1` would keep running the first version it downloaded.
@@ -81,6 +83,7 @@ updates:
 | No-transition comment on the issue | Jira has no transition from the current status to the target; adjust the Jira workflow or the rule |
 | Deploy did not update Jira | Workflow merged to the default branch? Workflow name listed under `workflow_run.workflows`? Issue key on the PR or commit? |
 | `check_suite` / `check_run` rule never runs | GitHub does not trigger workflows for GitHub Actions checks; use `workflow_run` |
+| `Jira answered 404` warning | The warning names the cause: a rejected login (email or token), a `JIRA_BASE_URL` that is not the site root, or an issue that doesn't exist or that the account cannot browse |
 | `401` / `403` from Jira | Wrong email or token, or the bot lacks project permissions |
 
 Logs are under **Actions → Jira Sync** with the prefix `[jira-sync]`; rules-file problems appear as annotations on the file.
