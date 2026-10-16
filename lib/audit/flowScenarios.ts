@@ -1,7 +1,8 @@
 /**
- * Table-driven regression scenarios for rule matching (no live Jira/GitHub).
+ * Table-driven regression scenarios for the bundled sample `settings.ts` (no live Jira/GitHub).
  *
- * Used by unit tests and {@link runJiraSyncFlowScenarioAudit}.
+ * Used by this package's unit tests via {@link runJiraSyncFlowScenarioAudit}. Not part of
+ * `dist/verify.mjs`: the expected rule names only exist in the sample config.
  *
  * @module audit/flowScenarios
  */
@@ -81,8 +82,8 @@ export const JIRA_SYNC_FLOW_SCENARIOS: FlowScenario[] = [
     expectRuleName: null,
   },
   {
-    id: 'pr-closed-merged-comment',
-    description: 'Merged close → comment only',
+    id: 'pr-closed-merged-main',
+    description: 'Merged to main → Done (before the generic merge comment rule)',
     ctx: {
       event: 'pull_request',
       action: 'closed',
@@ -167,6 +168,22 @@ export const JIRA_SYNC_FLOW_SCENARIOS: FlowScenario[] = [
     expectRuleName: null,
   },
   {
+    id: 'deploy-success',
+    description: 'Successful deploy → environment status',
+    ctx: {
+      event: 'workflow_run',
+      workflowName: 'Deploy',
+      runEvent: 'push',
+      conclusion: RunEnd.Success,
+      headSha: 'abc',
+      headBranch: 'dev',
+      runUrl: 'https://example.com/run/5',
+      runId: 5,
+    },
+    jiraStatus: 'Done',
+    expectRuleName: 'Deploy success → environment status',
+  },
+  {
     id: 'deploy-cancelled',
     description: 'Cancelled deploy → failure comment path',
     ctx: {
@@ -223,6 +240,50 @@ export const JIRA_SYNC_FLOW_SCENARIOS: FlowScenario[] = [
     },
     jiraStatus: 'In Progress',
     expectRuleName: null,
+  },
+  {
+    id: 'qg-fail-not-in-review',
+    description: 'QG failed on PR run outside In Review → comment only',
+    ctx: {
+      event: 'workflow_run',
+      workflowName: 'Quality Gate',
+      runEvent: RunTrigger.PullRequest,
+      conclusion: RunEnd.Failure,
+      headSha: 'abc',
+      headBranch: 'feature/proj-1',
+      runUrl: 'https://example.com/run/6',
+      runId: 6,
+    },
+    jiraStatus: 'In Progress',
+    expectRuleName: 'Quality gate failed → comment only',
+  },
+  {
+    id: 'review-approved',
+    description: 'Approved review on open PR → comment',
+    ctx: {
+      event: 'pull_request_review',
+      action: 'submitted',
+      reviewState: 'approved',
+      pr: pr({ title: 'PROJ-1 feature' }),
+      repository: repo,
+      url: 'https://example.com/pr/1',
+    },
+    jiraStatus: 'In Review',
+    expectRuleName: 'PR approved → comment',
+  },
+  {
+    id: 'release-published',
+    description: 'Published release → comment',
+    ctx: {
+      event: 'release',
+      action: 'published',
+      tagName: 'v1.0.0',
+      releaseName: 'PROJ-1 release',
+      releaseUrl: 'https://example.com/releases/v1.0.0',
+      repository: repo,
+    },
+    jiraStatus: 'Done',
+    expectRuleName: 'Release published → comment',
   },
 ];
 

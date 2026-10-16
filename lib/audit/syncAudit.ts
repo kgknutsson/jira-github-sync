@@ -1,20 +1,24 @@
 /**
- * Repository static audits: workflow YAML, docs, file layout, deploy alignment.
+ * Repository static audits: `settings.ts` safety checks, workflow YAML drift, package layout.
  *
- * Assumes `process.cwd()` is the repo root (Vitest / `verify.mjs` from root).
+ * {@link runJiraSyncAudit} (run by `dist/verify.mjs`) only compares `settings.ts` with the host
+ * repo's `jira-sync.yml`, so it keeps passing after you customize the sample rules.
+ * {@link runJiraSyncPackageAudit} checks this repository's bundled sample (flow scenarios, docs)
+ * and runs in the package's own tests.
  *
  * @module audit/syncAudit
  */
 import { jiraStatusNamesFromConfig } from '../config/jiraConfigLabels';
 import {
   consumerFileExists,
+  packagePathFromConsumer,
   readConsumerFile,
   readPackageFile,
 } from './repoPaths';
-import { DEPLOY_FAIL_ENDS, RunTrigger } from '../config/syncCatalog';
+import { DEPLOY_FAIL_ENDS } from '../config/syncCatalog';
+import type { GitHubEventKind } from '../config/types';
 import { builtSyncConfig } from '../../settings';
 import { validateBuiltSyncConfig } from '../config/validateConfig';
-import { compileConfig } from '../config/compileConfig';
 import { runJiraSyncFlowScenarioAudit } from './flowScenarios';
 
 /** One failed static check (workflow drift, missing doc phrase, etc.). */
@@ -34,6 +38,18 @@ function collectWorkflowNamesInRules(): string[] {
   return [...names];
 }
 
+/** Every `action` value used by rules for one event (empty when no rule filters on action). */
+function collectActionsInRules(event: GitHubEventKind): string[] {
+  const actions = new Set<string>();
+  for (const rule of builtSyncConfig.rules) {
+    if (rule.event !== event) continue;
+    const action = rule.when.action;
+    if (typeof action === 'string') actions.add(action);
+    if (Array.isArray(action)) action.forEach((a) => actions.add(a));
+  }
+  return [...actions];
+}
+
 function deployWorkflowNameFromConfig(): string {
   const rule = builtSyncConfig.rules.find(
     (r) => r.event === 'workflow_run' && r.then.kind === 'deploy'
@@ -42,61 +58,54 @@ function deployWorkflowNameFromConfig(): string {
   return typeof wf === 'string' ? wf : '';
 }
 
-function qualityGateWorkflowNameFromConfig(): string {
-  for (const rule of builtSyncConfig.rules) {
-    if (rule.event !== 'workflow_run') continue;
-    const runEvent = rule.when.runEvent;
-    const isPrRun =
-      runEvent === RunTrigger.PullRequest ||
-      (Array.isArray(runEvent) && runEvent.includes(RunTrigger.PullRequest));
-    if (!isPrRun) continue;
-    const wf = rule.when.workflow;
-    if (typeof wf === 'string') return wf;
+/** Capture-group count of a regex source (the appended `|` makes it match the empty string). */
+function captureGroupCount(source: string): number {
+  return new RegExp(`${source}|`).exec('')!.length - 1;
+}
+
+function unquoteYamlItem(item: string): string {
+  return item.trim().replace(/^(['"])(.*)\1$/, '$2');
+}
+
+/** Reads `key: [a, b]` (inline, possibly multi-line) or a `key:` block sequence of `- item` lines. */
+export function extractYamlStringList(source: string, key: string): string[] {
+  const inline = source.match(new RegExp(`(?<![\\w-])${key}:\\s*\\[([^\\]]*)\\]`, 's'))?.[1];
+  if (inline !== undefined) {
+    const withoutComments = inline.replace(/(^|\s)#.*$/gm, '$1');
+    return [...withoutComments.matchAll(/'([^']*)'|"([^"]*)"|([^,'"\s][^,]*)/g)]
+      .map((m) => (m[1] ?? m[2] ?? m[3] ?? '').trim())
+      .filter(Boolean);
   }
-  return '';
+
+  const lines = source.split(/\r?\n/);
+  const start = lines.findIndex((line) => new RegExp(`^\\s*${key}:\\s*(#.*)?$`).test(line));
+  if (start === -1) return [];
+  const items: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^\s*(#.*)?$/.test(line)) continue;
+    const item = line.match(/^\s*-\s*(.+?)\s*(?:\s#.*)?$/);
+    if (!item) break;
+    items.push(unquoteYamlItem(item[1]!));
+  }
+  return items;
 }
 
-const EXPECTED_WORKFLOW_NAMES = collectWorkflowNamesInRules();
-
-/** Actions referenced by pull_request rules in settings.ts */
-const SETTINGS_PR_ACTIONS = new Set<string>();
-
-for (const rule of builtSyncConfig.rules) {
-  if (rule.event !== 'pull_request') continue;
-  const action = rule.when.action;
-  if (typeof action === 'string') SETTINGS_PR_ACTIONS.add(action);
-  if (Array.isArray(action)) action.forEach((a) => SETTINGS_PR_ACTIONS.add(a));
-}
-
-function extractYamlStringList(source: string, key: string): string[] {
-  const inline = source.match(new RegExp(`${key}:\\s*\\[([^\\]]+)\\]`, 's'));
-  const inner =
-    inline?.[1] ?? source.match(new RegExp(`${key}:\\s*\\n\\s*\\[([^\\]]+)\\]`, 's'))?.[1];
-  if (!inner) return [];
-
-  const quoted = [...inner.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]!);
-  if (quoted.length > 0) return quoted;
-
-  return [...inner.matchAll(/['"]?([a-z_]+)['"]?/gi)].map((m) => m[1]!).filter(Boolean);
-}
+/** Activity types GitHub uses when a trigger has no `types:` list (other triggers: all types). */
+const DEFAULT_TRIGGER_TYPES: Record<string, string[]> = {
+  pull_request: ['opened', 'synchronize', 'reopened'],
+};
 
 /** Extract one `on:` trigger block (2-space indent under `on:`). */
 function extractOnTriggerBlock(yml: string, trigger: string): string {
   const escaped = trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(
-    `^  ${escaped}:\\s*\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9_]*:|^concurrency:|^permissions:|^env:|^jobs:)`,
+    `^  ${escaped}:[^\\n]*\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9_]*:|^concurrency:|^permissions:|^env:|^jobs:)`,
     'm'
   );
   return yml.match(re)?.[0] ?? '';
 }
 
-function extractPullRequestTypes(yml: string): string[] {
-  const prBlock = extractOnTriggerBlock(yml, 'pull_request');
-  if (!prBlock) return [];
-  return extractYamlStringList(prBlock, 'types');
-}
-
-/** Validates compiled settings and flow scenario expectations. */
+/** Validates compiled settings: config errors/warnings and deploy maps. */
 export function auditJiraSyncConfig(): JiraSyncAuditViolation[] {
   const violations: JiraSyncAuditViolation[] = [];
 
@@ -107,25 +116,30 @@ export function auditJiraSyncConfig(): JiraSyncAuditViolation[] {
     });
   }
 
-  const ruleIds = new Set<string>();
-  for (const rule of builtSyncConfig.rules) {
-    if (ruleIds.has(rule.id)) {
-      violations.push({ ruleId: 'duplicate-rule-id', message: `Duplicate rule id: ${rule.id}` });
+  const { deploy } = builtSyncConfig;
+  if (builtSyncConfig.rules.some((r) => r.then.kind === 'deploy')) {
+    if (Object.keys(deploy.environmentToJiraStatus).length === 0) {
+      violations.push({
+        ruleId: 'deploy-map-empty',
+        message: 'deployToJiraStatus() is used but .deploy({ environmentToJiraStatus }) is empty',
+      });
     }
-    ruleIds.add(rule.id);
+    let groups = 1;
+    try {
+      groups = captureGroupCount(deploy.jobNameRegex);
+    } catch {
+      /* invalid regex is already reported by validateBuiltSyncConfig */
+    }
+    if (groups < 1) {
+      violations.push({
+        ruleId: 'deploy-job-regex',
+        message: 'deploy.jobNameRegex needs a capture group for the environment, e.g. \\((dev|prod)\\)',
+      });
+    }
   }
 
-  const compiled = compileConfig(builtSyncConfig, false);
-  const sampleJob = 'Build and Deploy (test)';
-  if (!compiled.deployJobPattern.test(sampleJob)) {
-    violations.push({
-      ruleId: 'deploy-job-regex',
-      message: `deploy.jobNameRegex does not match sample job name "${sampleJob}"`,
-    });
-  }
-
-  for (const env of Object.values(builtSyncConfig.deploy.branchToEnvironment)) {
-    if (!(env in builtSyncConfig.deploy.environmentToJiraStatus)) {
+  for (const env of Object.values(deploy.branchToEnvironment)) {
+    if (!Object.hasOwn(deploy.environmentToJiraStatus, env)) {
       violations.push({
         ruleId: 'deploy-env-map',
         message: `branch maps to "${env}" but environmentToJiraStatus has no entry`,
@@ -133,59 +147,13 @@ export function auditJiraSyncConfig(): JiraSyncAuditViolation[] {
     }
   }
 
-  const workflowNamesInRules = new Set<string>();
-  for (const rule of builtSyncConfig.rules) {
-    if (rule.event !== 'workflow_run') continue;
-    const wf = rule.when.workflow;
-    if (typeof wf === 'string') workflowNamesInRules.add(wf);
-    if (Array.isArray(wf)) wf.forEach((w) => workflowNamesInRules.add(w));
-  }
-
-  for (const name of workflowNamesInRules) {
-    if (!EXPECTED_WORKFLOW_NAMES.includes(name)) {
-      violations.push({
-        ruleId: 'unknown-workflow-name',
-        message: `Rule references workflow "${name}" not in expected list`,
-      });
-    }
-  }
-
-  for (const expected of EXPECTED_WORKFLOW_NAMES) {
-    if (!workflowNamesInRules.has(expected)) {
-      violations.push({
-        ruleId: 'missing-workflow-rule',
-        message: `No workflow_run rule targets workflow "${expected}"`,
-      });
-    }
-  }
-
-  for (const rule of builtSyncConfig.rules) {
-    if (rule.event !== 'workflow_run') continue;
-    const wf = rule.when.workflow;
-    const qg = qualityGateWorkflowNameFromConfig();
-    const isQg = wf === qg || (Array.isArray(wf) && wf.includes(qg));
-    if (!isQg) continue;
-    const runEvent = rule.when.runEvent;
-    const prRun = RunTrigger.PullRequest;
-    const ok = runEvent === prRun || (Array.isArray(runEvent) && runEvent.includes(prRun));
-    if (!ok) {
-      violations.push({
-        ruleId: 'qg-run-event',
-        message: `Rule "${rule.name}" targets Quality Gate but missing runEvent pull_request (avoids nested deploy QG noise)`,
-      });
-    }
-  }
-
   return violations;
 }
 
-/** Checks deploy/QG rule conditions align with the sample workflow conventions. */
+/** Checks rule conditions against common safety conventions (open PRs, deploy failures). */
 export function auditJiraSyncFlowRules(): JiraSyncAuditViolation[] {
   const violations: JiraSyncAuditViolation[] = [];
-
-  for (const failure of runJiraSyncFlowScenarioAudit()) {
-    violations.push({ ruleId: 'flow-scenario', message: `[${failure.id}] ${failure.message}` });
-  }
+  const deployWorkflow = deployWorkflowNameFromConfig();
 
   for (const rule of builtSyncConfig.rules) {
     if (rule.event === 'pull_request' && rule.then.kind === 'transition') {
@@ -211,8 +179,9 @@ export function auditJiraSyncFlowRules(): JiraSyncAuditViolation[] {
       }
     }
     if (
+      deployWorkflow &&
       rule.event === 'workflow_run' &&
-      rule.when.workflow === deployWorkflowNameFromConfig() &&
+      rule.when.workflow === deployWorkflow &&
       rule.then.kind === 'comment' &&
       rule.name.toLowerCase().includes('failed')
     ) {
@@ -232,7 +201,7 @@ export function auditJiraSyncFlowRules(): JiraSyncAuditViolation[] {
   return violations;
 }
 
-/** Ensures `jira-sync.yml` triggers, permissions, and bundled runner command. */
+/** Ensures `jira-sync.yml` triggers, permissions, secrets, and bundled runner command. */
 export function auditJiraSyncWorkflowYaml(): JiraSyncAuditViolation[] {
   const violations: JiraSyncAuditViolation[] = [];
   if (!consumerFileExists('.github/workflows/jira-sync.yml')) {
@@ -244,36 +213,54 @@ export function auditJiraSyncWorkflowYaml(): JiraSyncAuditViolation[] {
     return violations;
   }
   const yml = readConsumerFile('.github/workflows/jira-sync.yml');
+  const settingsEvents = new Set(builtSyncConfig.rules.map((r) => r.event));
 
-  const runnerCmds = [
-    'node .github/workflows/jira-sync/dist/run.mjs',
-    'node dist/run.mjs',
-  ];
+  const packagePath = packagePathFromConsumer();
+  const bundledRunner = `node ${packagePath ? `${packagePath}/` : ''}dist/run.mjs`;
+  const runnerCmds = [...new Set([bundledRunner, 'node dist/run.mjs'])];
   if (!runnerCmds.some((cmd) => yml.includes(cmd))) {
     violations.push({
       ruleId: 'workflow-entry',
-      message: `jira-sync.yml must run bundled runner (${runnerCmds.join(' or ')}); no repo-root pnpm install`,
+      message: `jira-sync.yml must run the bundled runner (${runnerCmds.join(' or ')})`,
     });
   }
-  if (
-    yml.includes('pnpm install --frozen-lockfile') &&
-    !yml.includes('working-directory: .github/workflows/jira-sync')
-  ) {
-    violations.push({
-      ruleId: 'workflow-root-install',
-      message: 'jira-sync.yml must not run repo-root pnpm install (use bundled dist/run.mjs)',
-    });
+
+  const requireTypes = (trigger: string, required: string[], ruleId: string): void => {
+    if (required.length === 0) return;
+    const block = extractOnTriggerBlock(yml, trigger);
+    let types = block ? extractYamlStringList(block, 'types') : [];
+    if (block && types.length === 0) {
+      const defaults = DEFAULT_TRIGGER_TYPES[trigger];
+      if (!defaults) return;
+      types = defaults;
+    }
+    for (const type of required) {
+      if (!types.includes(type)) {
+        violations.push({
+          ruleId,
+          message: `jira-sync.yml ${trigger}.types missing "${type}" (required by settings.ts)`,
+        });
+      }
+    }
+  };
+
+  requireTypes('pull_request', collectActionsInRules('pull_request'), 'pr-trigger-gap');
+  requireTypes(
+    'pull_request_review',
+    collectActionsInRules('pull_request_review'),
+    'pr-review-trigger'
+  );
+  requireTypes('release', collectActionsInRules('release'), 'release-trigger');
+  if (settingsEvents.has('check_suite')) {
+    requireTypes('check_suite', ['completed'], 'check-suite-trigger');
   }
-  if (yml.includes('pnpm exec tsx .github/workflows/jira-sync/run.ts')) {
-    violations.push({
-      ruleId: 'workflow-entry-legacy',
-      message: 'jira-sync.yml must not invoke run.ts via tsx; rebuild dist and use dist/run.mjs',
-    });
+  if (settingsEvents.has('check_run')) {
+    requireTypes('check_run', ['completed'], 'check-run-trigger');
   }
 
   const wrBlock = extractOnTriggerBlock(yml, 'workflow_run');
   const listened = wrBlock ? extractYamlStringList(wrBlock, 'workflows') : [];
-  for (const name of EXPECTED_WORKFLOW_NAMES) {
+  for (const name of collectWorkflowNamesInRules()) {
     if (!listened.includes(name)) {
       violations.push({
         ruleId: 'workflow-listen',
@@ -281,16 +268,20 @@ export function auditJiraSyncWorkflowYaml(): JiraSyncAuditViolation[] {
       });
     }
   }
-
-  const prTypesFromBlock = extractPullRequestTypes(yml);
-
-  for (const action of SETTINGS_PR_ACTIONS) {
-    if (!prTypesFromBlock.includes(action)) {
-      violations.push({
-        ruleId: 'pr-trigger-gap',
-        message: `jira-sync.yml pull_request.types missing "${action}" (required by settings.ts)`,
-      });
-    }
+  if (wrBlock && !extractYamlStringList(wrBlock, 'types').includes('completed')) {
+    violations.push({
+      ruleId: 'workflow-run-types',
+      message: 'jira-sync.yml workflow_run.types must include completed',
+    });
+  }
+  if (
+    settingsEvents.has('workflow_run') &&
+    !yml.includes('workflow_run.repository.id == github.repository_id')
+  ) {
+    violations.push({
+      ruleId: 'workflow-cross-repo',
+      message: 'jira-sync job should guard workflow_run to same repository',
+    });
   }
 
   if (!yml.includes('pull-requests: read')) {
@@ -299,117 +290,36 @@ export function auditJiraSyncWorkflowYaml(): JiraSyncAuditViolation[] {
       message: 'jira-sync.yml needs pull-requests: read for commit→PR issue key lookup',
     });
   }
-
-  if (!yml.includes('checks: read')) {
+  if (
+    (settingsEvents.has('check_suite') || settingsEvents.has('check_run')) &&
+    !yml.includes('checks: read')
+  ) {
     violations.push({
       ruleId: 'workflow-permissions-checks',
       message: 'jira-sync.yml needs checks: read for check_suite / check_run sync',
     });
   }
 
-  const settingsEvents = new Set(builtSyncConfig.rules.map((r) => r.event));
-  if (settingsEvents.has('check_suite')) {
-    const csBlock = extractOnTriggerBlock(yml, 'check_suite');
-    if (!csBlock || !extractYamlStringList(csBlock, 'types').includes('completed')) {
+  for (const secret of ['JIRA_BASE_URL', 'JIRA_USER_EMAIL', 'JIRA_API_TOKEN']) {
+    if (!yml.includes(secret)) {
       violations.push({
-        ruleId: 'check-suite-trigger',
-        message: 'jira-sync.yml check_suite.types must include completed (settings has check_suite rules)',
+        ruleId: 'workflow-secrets',
+        message: `jira-sync.yml must pass ${secret} to the sync step`,
       });
     }
   }
-  if (settingsEvents.has('release')) {
-    const relBlock = extractOnTriggerBlock(yml, 'release');
-    if (!relBlock || !extractYamlStringList(relBlock, 'types').includes('published')) {
-      violations.push({
-        ruleId: 'release-trigger',
-        message: 'jira-sync.yml release.types must include published (settings has release rules)',
-      });
-    }
-  }
-
-  if (!yml.includes('JIRA_BASE_URL') || !yml.includes('JIRA_API_TOKEN')) {
+  if (!/GITHUB_TOKEN:\s*\$\{\{\s*(secrets\.GITHUB_TOKEN|github\.token)\s*\}\}/.test(yml)) {
     violations.push({
-      ruleId: 'workflow-secrets',
-      message: 'jira-sync.yml must pass JIRA_* secrets to the sync step',
-    });
-  }
-
-  if (!yml.includes('workflow_run.repository.id == github.repository_id')) {
-    violations.push({
-      ruleId: 'workflow-cross-repo',
-      message: 'jira-sync job should guard workflow_run to same repository',
-    });
-  }
-
-  const reviewBlock = extractOnTriggerBlock(yml, 'pull_request_review');
-  const reviewTypes = reviewBlock ? extractYamlStringList(reviewBlock, 'types') : [];
-  if (!reviewTypes.includes('submitted')) {
-    violations.push({
-      ruleId: 'pr-review-trigger',
-      message: 'jira-sync.yml pull_request_review.types must include submitted',
-    });
-  }
-
-  if (wrBlock && !extractYamlStringList(wrBlock, 'types').includes('completed')) {
-    violations.push({
-      ruleId: 'workflow-run-types',
-      message: 'jira-sync.yml workflow_run.types must include completed',
+      ruleId: 'workflow-github-token',
+      message:
+        'jira-sync.yml must pass GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} (PR / commit issue-key lookup)',
     });
   }
 
   return violations;
 }
 
-/** Ensures package docs cover required setup phrases. */
-export function auditJiraSyncDocs(): JiraSyncAuditViolation[] {
-  return auditPackageDocs([]);
-}
-
-function auditPackageDocs(violations: JiraSyncAuditViolation[]): JiraSyncAuditViolation[] {
-  const guide = readPackageFile('authoring-guide.md');
-  const setup = readPackageFile('setup.md');
-
-  const requiredInGuide = [
-    'settings.ts',
-    'syncCatalog.ts',
-    'When',
-    'If',
-    'noTransitionMessageId',
-    '[skip-jira]',
-    'jira-sync.yml',
-  ];
-  for (const snippet of requiredInGuide) {
-    if (!guide.includes(snippet)) {
-      violations.push({
-        ruleId: 'doc-coverage',
-        message: `authoring-guide.md missing "${snippet}"`,
-      });
-    }
-  }
-
-  const requiredInSetup = ['JIRA_BASE_URL', 'JIRA_API_TOKEN', '--preflight', 'settings.ts'];
-  for (const snippet of requiredInSetup) {
-    if (!setup.includes(snippet)) {
-      violations.push({
-        ruleId: 'doc-coverage',
-        message: `setup.md missing "${snippet}"`,
-      });
-    }
-  }
-
-  for (const status of jiraStatusNamesFromConfig(builtSyncConfig)) {
-    if (!guide.toLowerCase().includes(status.toLowerCase()) && !setup.includes(status)) {
-      violations.push({
-        ruleId: 'doc-event-matrix',
-        message: `authoring-guide.md or setup.md should mention Jira status "${status}" from settings.ts`,
-      });
-    }
-  }
-
-  return violations;
-}
-
-/** Verifies required engine files and `dist/` bundle exist; no legacy script paths. */
+/** Verifies required engine files and `dist/` bundle exist. */
 export function auditJiraSyncLayout(): JiraSyncAuditViolation[] {
   const violations: JiraSyncAuditViolation[] = [];
   const required = [
@@ -434,17 +344,78 @@ export function auditJiraSyncLayout(): JiraSyncAuditViolation[] {
       violations.push({ ruleId: 'layout-missing', message: `Missing required file ${rel}` });
     }
   }
+  return violations;
+}
+
+/** Ensures this package's docs cover required setup phrases and the sample's Jira statuses. */
+export function auditJiraSyncPackageDocs(): JiraSyncAuditViolation[] {
+  const violations: JiraSyncAuditViolation[] = [];
+  const guide = readPackageFile('authoring-guide.md');
+  const setup = readPackageFile('setup.md');
+
+  const requiredInGuide = [
+    'settings.ts',
+    'syncCatalog.ts',
+    'When',
+    'If',
+    'noTransitionMessageId',
+    '[skip-jira]',
+    'jira-sync.yml',
+  ];
+  for (const snippet of requiredInGuide) {
+    if (!guide.includes(snippet)) {
+      violations.push({
+        ruleId: 'doc-coverage',
+        message: `authoring-guide.md missing "${snippet}"`,
+      });
+    }
+  }
+
+  const requiredInSetup = [
+    'JIRA_BASE_URL',
+    'JIRA_USER_EMAIL',
+    'JIRA_API_TOKEN',
+    '--preflight',
+    'settings.ts',
+  ];
+  for (const snippet of requiredInSetup) {
+    if (!setup.includes(snippet)) {
+      violations.push({
+        ruleId: 'doc-coverage',
+        message: `setup.md missing "${snippet}"`,
+      });
+    }
+  }
+
+  for (const status of jiraStatusNamesFromConfig(builtSyncConfig)) {
+    if (!guide.toLowerCase().includes(status.toLowerCase()) && !setup.includes(status)) {
+      violations.push({
+        ruleId: 'doc-event-matrix',
+        message: `authoring-guide.md or setup.md should mention Jira status "${status}" from settings.ts`,
+      });
+    }
+  }
 
   return violations;
 }
 
-/** Runs all Jira sync static audits; empty array means pass. */
+/** Runs all portable static audits used by `dist/verify.mjs`; empty array means pass. */
 export function runJiraSyncAudit(): JiraSyncAuditViolation[] {
   return [
     ...auditJiraSyncLayout(),
     ...auditJiraSyncConfig(),
     ...auditJiraSyncFlowRules(),
     ...auditJiraSyncWorkflowYaml(),
-    ...auditJiraSyncDocs(),
+  ];
+}
+
+/** Checks tied to this repository's sample `settings.ts` and docs (package tests only). */
+export function runJiraSyncPackageAudit(): JiraSyncAuditViolation[] {
+  return [
+    ...runJiraSyncFlowScenarioAudit().map((failure) => ({
+      ruleId: 'flow-scenario',
+      message: `[${failure.id}] ${failure.message}`,
+    })),
+    ...auditJiraSyncPackageDocs(),
   ];
 }

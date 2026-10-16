@@ -1,7 +1,7 @@
 /**
  * Local verification entrypoint (config validation + static repo audits).
  *
- * Invoked by `pnpm verify:jira-sync` via `dist/verify.mjs`. Does not call Jira
+ * Run `node dist/verify.mjs` (or `npm run verify` in this repository). Does not call Jira
  * unless `--preflight` is set (requires `JIRA_*` secrets in env).
  *
  * @module verify
@@ -45,11 +45,12 @@ async function main(): Promise<void> {
     }
     const { accountId } = await verifyJiraConnection(jira);
     log.info(`Jira preflight OK (accountId ${accountId})`);
-    for (const issue of await validateJiraStringsAgainstProject(jira, builtSyncConfig)) {
+    const preflightIssues = await validateJiraStringsAgainstProject(jira, builtSyncConfig);
+    for (const issue of preflightIssues) {
       const fn = issue.level === 'error' ? log.error : log.info;
       fn(`[jira preflight ${issue.level}] ${issue.message}`);
-      if (issue.level === 'error') process.exit(1);
     }
+    if (preflightIssues.some((issue) => issue.level === 'error')) process.exit(1);
     log.info('Jira workflow status names OK');
   }
 }

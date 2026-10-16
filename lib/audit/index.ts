@@ -1,9 +1,13 @@
 /**
- * Static audit exports (workflow YAML, docs, layout, flow scenarios).
+ * Static audit exports (workflow YAML, layout, sample flow scenarios, package docs).
  *
  * @module audit
  */
-export { runJiraSyncAudit, type JiraSyncAuditViolation } from './syncAudit';
+export {
+  runJiraSyncAudit,
+  runJiraSyncPackageAudit,
+  type JiraSyncAuditViolation,
+} from './syncAudit';
 export {
   JIRA_SYNC_FLOW_SCENARIOS,
   evaluateFlowScenario,
