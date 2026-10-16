@@ -49,8 +49,10 @@ Copy [templates/jira-sync.config.yml](../templates/jira-sync.config.yml) to `.gi
 Locally (Node 20+):
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.1.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
+
+Use the release your workflow runs. npx caches each URL, so a moving tag like `v1` would keep running the first version it downloaded.
 
 With `JIRA_BASE_URL`, `JIRA_USER_EMAIL` and `JIRA_API_TOKEN` in your environment, add `--preflight` to also check the bot's login and that every status in your rules exists in the Jira project. In CI, the same check runs with `validate-only: true`.
 

@@ -1,5 +1,5 @@
-# Runs this repository's own action (uses: ./) with the sample rules, so every push and pull
-# request exercises the committed dist/index.mjs. Other repositories copy
+# Runs this repository's own action (uses: ./) with the sample rules, so pull requests and
+# releases exercise the committed dist/index.mjs on GitHub's runner. Other repositories copy
 # templates/jira-sync.workflow.yml instead. Without Jira secrets the action validates and skips.
 name: Jira Sync
 

@@ -36,4 +36,17 @@ describe('docs', () => {
     );
     expect(broken).toEqual([]);
   });
+
+  it('validate commands run the current release', () => {
+    const { version } = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string };
+    const tags = markdownFiles('.')
+      .filter((file) => !file.endsWith('CHANGELOG.md'))
+      .flatMap((file) =>
+        [...readFileSync(file, 'utf8').matchAll(/jira-github-sync\/archive\/refs\/tags\/(.+?)\.tar\.gz/g)].map(
+          (match) => `${file}: ${match[1]}`
+        )
+      );
+    expect(tags.length).toBeGreaterThan(0);
+    expect(tags.filter((tag) => !tag.endsWith(`: v${version}`))).toEqual([]);
+  });
 });
