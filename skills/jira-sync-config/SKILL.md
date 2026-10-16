@@ -1,177 +1,103 @@
 ---
 name: jira-sync-config
 description: >-
-  Authors GitHub–Jira sync rules in settings.ts for the bundled jira-sync engine:
-  options, messages, deploy maps, When/If DSL, YAML trigger alignment, dist rebuild,
-  and verify. Use when adding or changing Jira automation, editing
-  .github/workflows/jira-sync/settings.ts, jira-sync.yml, or copying jira-sync to
-  another repo.
+  Writes and reviews rules for the kgknutsson/jira-github-sync GitHub Action: the YAML rules
+  file (.github/jira-sync.config.yml) and the workflow that runs it
+  (.github/workflows/jira-sync.yml). Use when adding or changing Jira automation driven by
+  GitHub events (pull requests, reviews, CI and deploy workflow runs, releases), setting the
+  action up in a repository, or debugging why a Jira issue did not move.
 disable-model-invocation: true
 ---
 
-# Jira sync config authoring
+# Jira sync rules
 
-Teach the agent to produce **valid, review-ready** jira-sync configuration. This skill lives inside the portable package so it copies with `.github/workflows/jira-sync/`.
+Produce valid, review-ready rules for jira-github-sync. Full reference: [docs/configuration.md](https://github.com/kgknutsson/jira-github-sync/blob/main/docs/configuration.md). Checklist: [reference.md](./reference.md).
 
-**Read first:** [authoring-guide.md](../../authoring-guide.md) (examples for every event). **Checklist:** [reference.md](./reference.md).
+Do **not** use this skill for implementing Jira tickets (coding work), only for sync configuration.
 
-**Sample config:** [settings.ts](../../settings.ts) in this repository.
+## Workflow (in order)
 
----
+### 1. Collect the repository's strings
 
-## When to apply this skill
-
-- User asks to sync Jira with GitHub PRs, deploys, CI, releases, labels, etc.
-- User edits `settings.ts`, `jira-sync.yml`, or messages/deploy sections
-- User adopts jira-sync into a new repository
-
-Do **not** use for general Jira ticket implementation (coding tasks) — only for **sync configuration**.
-
----
-
-## Workflow (strict order)
-
-### 1. Clarify repo-specific strings
-
-Collect or infer (ask if missing):
+Ask when they are missing; never guess Jira spelling.
 
 | Input | Example |
 | ----- | ------- |
-| Jira **project key** | `PROJ` |
-| Status **names** (exact, case-sensitive) | `In Review`, `Done`, `Deployed (Test)` |
-| Transition **names** | `Start review`, `Rework`, `Request changes` |
-| Deploy workflow **`name:`** (YAML `name:` field) | Must match `name:` in your deploy workflow YAML |
-| Other workflow names | `Quality Gate` |
-| Target branches | `dev`, `test`, `main` |
+| Jira project key | `PROJ` |
+| Status names (exact, case-sensitive) | `In Review`, `Done`, `Deployed (Test)` |
+| Transition names (optional, for `via`) | `Start review` |
+| Workflow `name:` values | `Quality Gate`, `Deploy` |
+| Branches | `dev`, `test`, `main` |
 
-Never guess Jira status spelling — match the customer’s board or `settings.ts` in the same repo.
+### 2. Plan the rules
 
-### 2. Plan rules before coding
+For each intent decide:
 
-For each user intent, specify:
+1. **Event:** `when` (`pull_request`, `pull_request_review`, `workflow_run`, `release`, …)
+2. **Conditions:** `if` (GitHub side) and `ifJiraStatus` / `unlessJiraStatus` (Jira side)
+3. **One action:** `transitionTo`, `deployToJiraStatus: true` (workflow_run only) or `comment`
+4. **Order:** the first matching rule wins, so specific rules go above general ones
 
-1. **GitHub event** → `When.*`
-2. **Conditions** → `.if(If.*, …)`, Jira filters `.ifJiraStatus` / `.unlessJiraStatus`
-3. **Action** → `.transitionTo` | `.deployToJiraStatus` | `.comment`
-4. **Rule order** — more specific rules **above** broader ones
+### 3. Edit `.github/jira-sync.config.yml`
 
-Document the plan briefly; then edit **only** `settings.ts` unless engine gaps require `lib/` changes.
+Keep the `# yaml-language-server: $schema=…` first line. Pattern:
 
-### 3. Edit `settings.ts` correctly
-
-**Imports:** enums from `./lib/config` — `config`, `When`, `If`, `PrAct`, `RunEnd`, `CheckEnd`, `ReleaseAct`, `Review`, `ReviewAct`, `RunTrigger`, `Pr`, `DeployState`.
-
-**Strings stay inline** — Jira statuses, transition names, workflow titles, message bodies.
-
-**Pattern:**
-
-```ts
-export const builtSyncConfig = config('PROJECT-KEY')
-  .options({ skipMarker: '[skip-jira]', noTransitionMessageId: 'noTransition', /* … */ })
-  .messages({ /* every referenced template id */ })
-  .deploy({ /* only if deployToJiraStatus is used */ })
-  .when(When.PullRequest)
-  .named('Descriptive name')
-  .if(If.Action, PrAct.Opened)
-  .if(If.PrState, Pr.Open)
-  .ifNot(If.Draft)
-  .transitionTo('In Review', { via: ['Start review'] })
-  .build();
+```yaml
+projectKey: PROJ
+messages:
+  merged: 'Pull request merged to {baseRef}: {url}'
+rules:
+  - name: PR ready → In Review
+    when: pull_request
+    if: { action: [opened, reopened, ready_for_review, synchronize], prState: open, draft: false }
+    transitionTo: In Review
+    linkGithub: pull_request
 ```
 
-**Quality gates:**
+Quality bar:
 
-- Every `comment('x')` / `onNoTransition` / `commentAfterSuccess` id exists in `.messages`
-- PR transition rules on open PRs use `.if(If.PrState, Pr.Open)` or merged exception
-- QG-on-PR rules use `.if(If.RunEvent, RunTrigger.PullRequest)` when ignoring push/workflow_call runs
-- Deploy failure rules include `RunEnd.Failure`, `RunEnd.Cancelled`, `RunEnd.TimedOut` when commenting failures
-- Use `.if(If.NotLabel, 'skip-jira')` or `skipMarker` for opt-out when requested
+- Every message id used by `comment`, `commentAfterSuccess`, `commentWhenSkipped` or `onNoTransition` exists under `messages`.
+- PR transition rules require `prState: open` (or `merged: true`); review rules require `prState: open`.
+- CI rules on PRs use `runEvent: pull_request` so push-triggered runs are ignored.
+- Deploy failure comments list `conclusion: [failure, cancelled, timed_out]`.
+- Opt-outs use `skipMarker` (quoted: `'[skip-jira]'`) or a `notLabel` condition.
 
-Copy-paste event templates from [authoring-guide.md](../../authoring-guide.md) and adapt strings.
+### 4. Align `.github/workflows/jira-sync.yml`
 
-### 4. Update `jira-sync.yml` when triggers change
+| Rules use | Workflow needs |
+| --------- | -------------- |
+| `when: X` | an `on.X` trigger |
+| `if: { action: … }` | each value under `on.X.types` (`pull_request` defaults to only opened / synchronize / reopened) |
+| `if: { workflow: Name }` | `Name` under `on.workflow_run.workflows`, `types: [completed]` |
+| `workflow_run`, `issue_comment` or check events | `pull-requests: read` |
+| `deployToJiraStatus` | `actions: read` and a `deploy:` map |
 
-File: `.github/workflows/jira-sync.yml` (sibling of the `jira-sync/` folder).
+Start from [templates/jira-sync.workflow.yml](https://github.com/kgknutsson/jira-github-sync/blob/main/templates/jira-sync.workflow.yml). The workflow must be on the default branch for `workflow_run`.
 
-| New rule uses | YAML must include |
-| ------------- | ----------------- |
-| `PrAct.*` in `.if(If.Action, …)` | same values under `on.pull_request.types` |
-| `ReviewAct.*` in `.if(If.Action, …)` | same values under `on.pull_request_review.types` |
-| `.if(If.Workflow, 'Name')` | `'Name'` in `on.workflow_run.workflows` |
-| `When.CheckSuite` | `check_suite.types: [completed]`, permission `checks: read` |
-| `When.Release` | `release.types` with every `ReleaseAct` used (e.g. `published`) |
-| `When.CheckRun` | `check_run.types: [completed]` |
-
-`check_suite` / `check_run` only fire for **third-party** CI apps — GitHub never triggers workflows for checks created by GitHub Actions. For Actions CI use `When.WorkflowRun`.
-
-Keep entrypoint: `node .github/workflows/jira-sync/dist/run.mjs`.
-
-### 5. Rebuild and verify
-
-From jira-sync directory:
+### 5. Validate
 
 ```bash
-node build.mjs
-node dist/verify.mjs
+npx -y github:kgknutsson/jira-github-sync#v1 validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
 
-Do not use `npm run qa` in a host repo after customizing `settings.ts`: its unit tests assert this package's sample rules.
+Add `--preflight` (with `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN` set) to confirm every status exists in Jira. Fix all errors and warnings.
 
-Optional Jira API check:
-
-```bash
-node dist/verify.mjs --preflight
-```
-
-Requires `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`.
-
-**Commit `dist/run.mjs` and `dist/verify.mjs`** with source changes.
-
-### 6. Engine changes (rare)
-
-Only if the user needs a **new GitHub webhook field** or event not in `syncCatalog.ts`:
-
-1. Add enum + JSDoc in `lib/config/syncCatalog.ts`
-2. Parse in `lib/adapters/github/parseEvent.ts`
-3. Match in `lib/engine/matchRule.ts`
-4. Extend `lib/config/dsl.ts` overloads for typed `.if()`
-5. Add flow scenario in `lib/audit/flowScenarios.ts` + unit test
-6. Rebuild `dist/`
-
-Default: **settings + YAML only**.
-
----
-
-## Common mistakes (avoid)
+## Common mistakes
 
 | Mistake | Fix |
 | ------- | --- |
-| Jira strings in `syncCatalog.ts` | Move to `settings.ts` |
-| Broad merge rule before `main` → Done | Reorder rules |
-| Missing message key | Add to `.messages({ … })` |
-| Workflow name typo | Match deploy/QG YAML `name:` exactly |
-| Forgot `workflow_run` on default branch | Document: listener must be on the default branch |
-| Edit TS without rebuilding dist | Run `node build.mjs`, commit dist |
-| `tsx run.ts` in Actions | Use bundled `dist/run.mjs` only |
-| `When.CheckSuite` + `'GitHub Actions'` | Never fires — use `When.WorkflowRun` + workflow `name:` |
+| Broad rule above a specific one | Reorder: e.g. "merged to main → Done" above "merged → comment" |
+| `check_suite` / `check_run` rule for GitHub Actions CI | Never fires; use `workflow_run` with the workflow name |
+| Unquoted `[skip-jira]`, or numbers like `1.10` | Quote them |
+| Action matched in a rule but not in `types` | Add it to the workflow trigger |
+| Transition on PR events without `prState: open` | Edits to closed PRs would move the issue |
+| `issue_comment` transitions on a public repo | Anyone can comment; prefer comments or drop the trigger |
 
----
+## Output
 
-## Output expectations
+When done, report:
 
-When finishing a config task, report:
-
-1. **Rules added/changed** (names + Jira effect)
-2. **YAML changes** (if any)
-3. **Verify command** run and result
-4. **Manual follow-up** (Jira transitions, secrets, label `skip-jira`, etc.)
-
----
-
-## Related docs
-
-| Doc | Path |
-| --- | ---- |
-| Authoring guide | [authoring-guide.md](../../authoring-guide.md) |
-| Setup / secrets | [setup.md](../../setup.md) |
-| Enum reference | [syncCatalog.ts](../../lib/config/syncCatalog.ts) (hover in IDE) |
+1. Rules added or changed (name and Jira effect)
+2. Workflow changes
+3. The validate command you ran and its result
+4. Manual follow-up (Jira transitions or statuses to create, secrets, labels)

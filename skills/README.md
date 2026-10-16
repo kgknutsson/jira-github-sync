@@ -1,34 +1,22 @@
-# Agent skills (portable)
-
-These skills travel with the package when you copy it into another repository.
+# Agent skill
 
 | Skill | Purpose |
 | ----- | ------- |
-| [jira-sync-config](./jira-sync-config/SKILL.md) | Author or extend `settings.ts`, align `jira-sync.yml`, rebuild `dist/` |
+| [jira-sync-config](./jira-sync-config/SKILL.md) | Write or review `.github/jira-sync.config.yml` rules and align `.github/workflows/jira-sync.yml` |
 
-## Install in Cursor (host repo)
+## Install in a repository
 
-Copy into the project:
+- **Cursor:** copy `skills/jira-sync-config/` from this repository to `.cursor/skills/jira-sync-config/` and reload skills.
+- **GitHub Copilot (VS Code):** copy it to `.github/skills/jira-sync-config/`.
 
-```text
-.cursor/skills/jira-sync-config/   ← copy from skills/jira-sync-config/
-```
-
-Or add a pointer skill that tells the agent to read the vendored path, e.g.  
-`.github/workflows/jira-sync/skills/jira-sync-config/SKILL.md`
-
-Reload skills after adding.
-
-## Install in GitHub Copilot (host repo)
-
-Copy `skills/jira-sync-config/` to `.github/skills/jira-sync-config/` (VS Code Copilot skill discovery).
+The skill links to the docs in this repository, so it works without copying anything else.
 
 ## When to use
 
-Ask the agent to use skill **`jira-sync-config`** when you:
+Ask the agent to use **`jira-sync-config`** when you:
 
-- Add or change Jira sync rules, messages, deploy maps, or options
-- Wire new GitHub events to Jira statuses
-- Adopt jira-github-sync into a new repository
+- add or change Jira rules, messages or the deploy map;
+- connect a new GitHub event or workflow to Jira statuses;
+- set up jira-github-sync in a new repository, or debug why an issue did not move.
 
-Human docs: [authoring-guide.md](../authoring-guide.md) · [setup.md](../setup.md)
+Human docs: [README](../README.md) · [setup](../docs/setup.md) · [rules reference](../docs/configuration.md)
