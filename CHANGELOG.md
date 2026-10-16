@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3 — 2026-10-16
+
+### Fixed
+
+- Statuses work whatever language the Jira account uses. Jira returns status names in the account's language (e.g. "In Progress" as 正在进行), so rules, `ifJiraStatus` conditions and the deploy map never matched for a non-English account. The action now reads the untranslated name of each status, and comments show those names. The preflight accepts both.
+- Workflow template: PR events, reviews and workflow runs for the same PR share one concurrency group with `queue: max`. Before, a slow sync for a push could finish after a "changes requested" review and move the issue back to In Review, and GitHub's default single pending slot could drop an event.
+
 ## 1.0.2 — 2026-10-16
 
 ### Fixed

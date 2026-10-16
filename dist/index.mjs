@@ -7486,6 +7486,31 @@ async function explainIssueNotFound(config, issueKey) {
   }
   return `${issueKey} does not exist, or the Jira account cannot browse its project.`;
 }
+var untranslatedNamesCache = /* @__PURE__ */ new WeakMap();
+function untranslatedStatusNames(config) {
+  let names = untranslatedNamesCache.get(config);
+  if (!names) {
+    names = loadUntranslatedStatusNames(config);
+    untranslatedNamesCache.set(config, names);
+  }
+  return names;
+}
+async function loadUntranslatedStatusNames(config) {
+  const byId = /* @__PURE__ */ new Map();
+  try {
+    const res = await jiraFetch(config, "/rest/api/3/status");
+    const data = res.ok ? await res.json() : [];
+    for (const status of Array.isArray(data) ? data : []) {
+      if (status.id && status.untranslatedName) byId.set(status.id, status.untranslatedName);
+    }
+  } catch {
+  }
+  return byId;
+}
+async function untranslatedStatusName(config, status) {
+  if (!status?.name) return null;
+  return status.id && (await untranslatedStatusNames(config)).get(status.id) || status.name;
+}
 async function getIssueStatusName(config, issueKey) {
   const res = await jiraFetch(
     config,
@@ -7495,7 +7520,7 @@ async function getIssueStatusName(config, issueKey) {
     throwForIssueResponse(res, issueKey, "get issue");
   }
   const data = await res.json();
-  return data.fields?.status?.name ?? null;
+  return untranslatedStatusName(config, data.fields?.status);
 }
 async function listIssueTransitions(config, issueKey) {
   const res = await jiraFetch(
@@ -7506,7 +7531,12 @@ async function listIssueTransitions(config, issueKey) {
     throwForIssueResponse(res, issueKey, "list transitions");
   }
   const data = await res.json();
-  return data.transitions ?? [];
+  return Promise.all(
+    (data.transitions ?? []).map(async (transition) => ({
+      ...transition,
+      to: { ...transition.to, name: await untranslatedStatusName(config, transition.to) ?? transition.to.name }
+    }))
+  );
 }
 async function applyTransition(config, issueKey, transitionId) {
   const res = await jiraFetch(
@@ -7617,6 +7647,7 @@ async function listProjectStatusNames(config, projectKey) {
   for (const item of data) {
     for (const st of item.statuses ?? []) {
       if (st.name) names.add(st.name);
+      if (st.untranslatedName) names.add(st.untranslatedName);
     }
   }
   return names;

@@ -21,11 +21,15 @@ on:
   release:
     types: [published]
 
-# One queue per PR / workflow run / release. Never cancel an in-flight sync: a cancelled run can
-# drop the transition for an earlier event (e.g. `opened`).
+# One queue per pull request (its PR events, reviews and workflow runs), and per other workflow
+# run or release. Runs wait their turn (queue: max) instead of overlapping or cancelling each
+# other, so a slow sync can't overwrite a newer status and no event is dropped.
 concurrency:
-  group: jira-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.workflow_run.id || github.event.release.id || github.sha }}
-  cancel-in-progress: false
+  group: >-
+    ${{ (github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number)
+    && format('jira-sync-pr-{0}', github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number)
+    || format('jira-sync-{0}-{1}', github.event_name, github.event.workflow_run.id || github.event.release.id || github.sha) }}
+  queue: max
 
 permissions:
   contents: read

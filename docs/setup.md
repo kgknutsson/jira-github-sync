@@ -40,7 +40,7 @@ Copy [templates/jira-sync.workflow.yml](../templates/jira-sync.workflow.yml) to 
 - [ ] Adjust the `pull_request` branches (and the matching branch list in the job's `if:`) to your branches.
 - [ ] Merge it to the **default branch**: GitHub only sends `workflow_run` events to workflows there.
 
-The template asks for `contents: read` (checkout), `pull-requests: read` (PR lookups) and `actions: read` (deploy job names) and nothing else. It checks out only `.github`, queues runs per PR instead of cancelling them, and skips workflow runs that came from forks.
+The template asks for `contents: read` (checkout), `pull-requests: read` (PR lookups) and `actions: read` (deploy job names) and nothing else. It checks out only `.github`, and skips workflow runs that came from forks. Runs for one PR (its events, reviews and workflow runs) share a queue and run one at a time in order (`queue: max`), so a slow sync can't overwrite a newer status and no event is dropped.
 
 ## 4. Rules file
 
@@ -51,7 +51,7 @@ Copy [templates/jira-sync.config.yml](../templates/jira-sync.config.yml) to `.gi
 Locally (Node 20+):
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.2.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.3.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
 
 Use the release your workflow runs. npx caches each URL, so a moving tag like `v1` would keep running the first version it downloaded.

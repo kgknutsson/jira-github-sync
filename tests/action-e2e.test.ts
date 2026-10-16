@@ -10,12 +10,20 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished }
 /** End-to-end runs of the bundled action (dist/index.mjs) against a fake Jira server. */
 const ROOT = process.cwd();
 const STATUSES = ['In Progress', 'In Review', 'Done', 'Deployed (Dev)', 'Deployed (Test)'];
+const statusId = (name: string) => String(STATUSES.indexOf(name) + 1);
+/** Names a Jira account set to Chinese sees. */
+const CHINESE: Record<string, string> = { 'In Progress': '正在进行', 'In Review': '审核中' };
 
 type Call = { method: string; url: string; body?: unknown };
 const calls: Call[] = [];
 const issueStatus: Record<string, string> = {};
+let accountLanguage: 'en' | 'zh' = 'en';
 let server: Server;
 let jiraUrl: string;
+
+function statusRef(name: string) {
+  return { id: statusId(name), name: (accountLanguage === 'zh' && CHINESE[name]) || name };
+}
 
 function fakeJira(): Server {
   return createServer((req, res) => {
@@ -28,8 +36,13 @@ function fakeJira(): Server {
         res.end(JSON.stringify(value));
       };
       if (req.url === '/rest/api/3/myself') return json({ accountId: 'bot-account' });
+      if (req.url === '/rest/api/3/status') {
+        return json(STATUSES.map((name) => ({ ...statusRef(name), untranslatedName: name })));
+      }
       if (req.url === '/rest/api/3/project/PROJ/statuses') {
-        return json([{ name: 'Task', statuses: STATUSES.map((name) => ({ name })) }]);
+        return json([
+          { name: 'Task', statuses: STATUSES.map((name) => ({ ...statusRef(name), untranslatedName: name })) },
+        ]);
       }
       const match = req.url!.match(/^\/rest\/api\/3\/issue\/([A-Z]+-\d+)(\/\w+)?/);
       const key = match?.[1];
@@ -38,9 +51,9 @@ function fakeJira(): Server {
         return res.end('{}');
       }
       const sub = match?.[2] ?? '';
-      if (req.method === 'GET' && sub === '') return json({ fields: { status: { name: issueStatus[key] } } });
+      if (req.method === 'GET' && sub === '') return json({ fields: { status: statusRef(issueStatus[key]!) } });
       if (req.method === 'GET' && sub === '/transitions') {
-        return json({ transitions: [{ id: '11', name: 'Start review', to: { name: 'In Review' } }] });
+        return json({ transitions: [{ id: '11', name: 'Start review', to: statusRef('In Review') }] });
       }
       if (req.method === 'POST' && sub === '/transitions') {
         issueStatus[key] = 'In Review';
@@ -115,6 +128,7 @@ afterAll(() => {
 beforeEach(() => {
   calls.length = 0;
   issueStatus['PROJ-5'] = 'In Progress';
+  accountLanguage = 'en';
 });
 
 describe('action (dist/index.mjs)', () => {
@@ -129,6 +143,22 @@ describe('action (dist/index.mjs)', () => {
       body: { transition: { id: '11' } },
     });
     expect(calls.some((c) => c.url === '/rest/api/3/issue/PROJ-5/remotelink')).toBe(true);
+  });
+
+  it('matches statuses by their untranslated names when the Jira account uses another language', async () => {
+    accountLanguage = 'zh';
+    const { code, output } = await runAction({ GITHUB_EVENT_NAME: 'pull_request' }, openedPr);
+    expect(code, output).toBe(0);
+    expect(output).not.toContain('::warning');
+    expect(calls).toContainEqual({
+      method: 'POST',
+      url: '/rest/api/3/issue/PROJ-5/transitions',
+      body: { transition: { id: '11' } },
+    });
+
+    calls.length = 0;
+    const preflight = await runAction({ GITHUB_EVENT_NAME: 'pull_request', 'INPUT_VALIDATE-ONLY': 'true' });
+    expect(preflight.output).toContain('Jira status names OK');
   });
 
   it('validate-only checks Jira status names and changes nothing', async () => {

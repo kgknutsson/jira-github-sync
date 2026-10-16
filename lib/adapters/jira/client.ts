@@ -149,7 +149,43 @@ export async function explainIssueNotFound(config: JiraConfig, issueKey: string)
   return `${issueKey} does not exist, or the Jira account cannot browse its project.`;
 }
 
-/** Current workflow column name for an issue, or `null` if missing. */
+type JiraStatusRef = { id?: string; name?: string };
+
+const untranslatedNamesCache = new WeakMap<JiraConfig, Promise<Map<string, string>>>();
+
+/**
+ * Untranslated status names by status id, loaded once per credentials object. Jira returns
+ * status names in the calling account's language; rules use the untranslated names.
+ */
+function untranslatedStatusNames(config: JiraConfig): Promise<Map<string, string>> {
+  let names = untranslatedNamesCache.get(config);
+  if (!names) {
+    names = loadUntranslatedStatusNames(config);
+    untranslatedNamesCache.set(config, names);
+  }
+  return names;
+}
+
+async function loadUntranslatedStatusNames(config: JiraConfig): Promise<Map<string, string>> {
+  const byId = new Map<string, string>();
+  try {
+    const res = await jiraFetch(config, '/rest/api/3/status');
+    const data: unknown = res.ok ? await res.json() : [];
+    for (const status of Array.isArray(data) ? (data as { id?: string; untranslatedName?: string }[]) : []) {
+      if (status.id && status.untranslatedName) byId.set(status.id, status.untranslatedName);
+    }
+  } catch {
+    // Without the list, statuses keep the names Jira returned.
+  }
+  return byId;
+}
+
+async function untranslatedStatusName(config: JiraConfig, status?: JiraStatusRef): Promise<string | null> {
+  if (!status?.name) return null;
+  return (status.id && (await untranslatedStatusNames(config)).get(status.id)) || status.name;
+}
+
+/** Current status of an issue (untranslated name), or `null` if missing. */
 export async function getIssueStatusName(
   config: JiraConfig,
   issueKey: string
@@ -161,11 +197,11 @@ export async function getIssueStatusName(
   if (!res.ok) {
     throwForIssueResponse(res, issueKey, 'get issue');
   }
-  const data = (await res.json()) as { fields?: { status?: { name?: string } } };
-  return data.fields?.status?.name ?? null;
+  const data = (await res.json()) as { fields?: { status?: JiraStatusRef } };
+  return untranslatedStatusName(config, data.fields?.status);
 }
 
-/** Available transitions from the issue's current column. */
+/** Available transitions from the issue's current status; `to.name` is untranslated. */
 export async function listIssueTransitions(
   config: JiraConfig,
   issueKey: string
@@ -177,8 +213,13 @@ export async function listIssueTransitions(
   if (!res.ok) {
     throwForIssueResponse(res, issueKey, 'list transitions');
   }
-  const data = (await res.json()) as { transitions?: JiraTransitionOption[] };
-  return data.transitions ?? [];
+  const data = (await res.json()) as { transitions?: (JiraTransitionOption & { to: JiraStatusRef })[] };
+  return Promise.all(
+    (data.transitions ?? []).map(async (transition) => ({
+      ...transition,
+      to: { ...transition.to, name: (await untranslatedStatusName(config, transition.to)) ?? transition.to.name },
+    }))
+  );
 }
 
 async function applyTransition(
@@ -323,7 +364,7 @@ export async function updateIssueFields(
   }
 }
 
-/** Status names available in a Jira project workflow (for config preflight). */
+/** Status names in a Jira project's workflows, untranslated and as the account sees them (preflight). */
 export async function listProjectStatusNames(
   config: JiraConfig,
   projectKey: string
@@ -336,11 +377,15 @@ export async function listProjectStatusNames(
     const text = await res.text();
     throw new JiraApiError(res.status, `Jira project statuses failed: ${text.slice(0, 200)}`);
   }
-  const data = (await res.json()) as { name?: string; statuses?: { name?: string }[] }[];
+  const data = (await res.json()) as {
+    name?: string;
+    statuses?: { name?: string; untranslatedName?: string }[];
+  }[];
   const names = new Set<string>();
   for (const item of data) {
     for (const st of item.statuses ?? []) {
       if (st.name) names.add(st.name);
+      if (st.untranslatedName) names.add(st.untranslatedName);
     }
   }
   return names;
