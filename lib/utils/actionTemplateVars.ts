@@ -5,7 +5,16 @@
  */
 import type { SyncEventContext } from '../engine/types';
 
-/** Builds `{url}`, `{baseRef}`, `{headRef}`, etc. for {@link formatMessage}. */
+function commitUrl(repository: string, sha: string, suffix = ''): string {
+  if (!repository || !sha) return '';
+  const server = process.env.GITHUB_SERVER_URL ?? 'https://github.com';
+  return `${server}/${repository}/commit/${sha}${suffix}`;
+}
+
+/**
+ * Builds `{url}`, `{baseRef}`, `{headRef}`, etc. for {@link formatMessage}. Transition and deploy
+ * steps layer `{status}` / `{targetStatus}` / `{env}` on top of these.
+ */
 export function actionTemplateVars(
   ctx: SyncEventContext,
   issueKey: string,
@@ -44,7 +53,9 @@ export function actionTemplateVars(
     case 'check_run':
       return {
         ...base,
-        url: 'checkUrl' in ctx ? ctx.checkUrl : '',
+        url:
+          ('checkUrl' in ctx ? ctx.checkUrl : '') ||
+          commitUrl(ctx.repository, ctx.headSha, '/checks'),
         checkName: ctx.checkName,
         headRef: ctx.headBranch,
         conclusion: ctx.conclusion ?? '',
@@ -60,7 +71,7 @@ export function actionTemplateVars(
     case 'push':
       return {
         ...base,
-        url: '',
+        url: commitUrl(ctx.repository, ctx.headSha),
         headRef: ctx.ref.replace(/^refs\/heads\//, ''),
         ref: ctx.ref,
       };
@@ -74,6 +85,7 @@ export function actionTemplateVars(
     case 'merge_group':
       return {
         ...base,
+        url: commitUrl(ctx.repository, ctx.headSha),
         headRef: ctx.headRef,
         baseRef: ctx.baseRef,
       };

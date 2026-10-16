@@ -593,6 +593,11 @@ function formatMessage(template, vars) {
 }
 
 // lib/utils/actionTemplateVars.ts
+function commitUrl(repository, sha, suffix = "") {
+  if (!repository || !sha) return "";
+  const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
+  return `${server}/${repository}/commit/${sha}${suffix}`;
+}
 function actionTemplateVars(ctx, issueKey, jiraStatus) {
   const base = {
     issueKey,
@@ -626,7 +631,7 @@ function actionTemplateVars(ctx, issueKey, jiraStatus) {
     case "check_run":
       return {
         ...base,
-        url: "checkUrl" in ctx ? ctx.checkUrl : "",
+        url: ("checkUrl" in ctx ? ctx.checkUrl : "") || commitUrl(ctx.repository, ctx.headSha, "/checks"),
         checkName: ctx.checkName,
         headRef: ctx.headBranch,
         conclusion: ctx.conclusion ?? ""
@@ -642,7 +647,7 @@ function actionTemplateVars(ctx, issueKey, jiraStatus) {
     case "push":
       return {
         ...base,
-        url: "",
+        url: commitUrl(ctx.repository, ctx.headSha),
         headRef: ctx.ref.replace(/^refs\/heads\//, ""),
         ref: ctx.ref
       };
@@ -656,6 +661,7 @@ function actionTemplateVars(ctx, issueKey, jiraStatus) {
     case "merge_group":
       return {
         ...base,
+        url: commitUrl(ctx.repository, ctx.headSha),
         headRef: ctx.headRef,
         baseRef: ctx.baseRef
       };
@@ -750,10 +756,8 @@ function parseDeployEnvironment(jobs, headBranch, jobNamePattern, branchToEnv, v
 
 // lib/actions/deployAction.ts
 async function commentWithKey(ctx, messageKey, extra) {
-  if (ctx.event.event !== "workflow_run") return;
   const text = formatMessage(ctx.compiled.messageTemplate(messageKey), {
-    url: ctx.event.runUrl,
-    issueKey: ctx.issueKey,
+    ...actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus),
     ...extra
   });
   await addIssueComment(ctx.jira, ctx.issueKey, text);
@@ -851,13 +855,9 @@ async function resolveIssueKeysForWorkflowRun(headSha, headBranch, extractAll, o
 }
 
 // lib/actions/transitionAction.ts
-function urlFor(ctx) {
-  return ctx.event.event === "workflow_run" ? ctx.event.runUrl : ctx.event.url;
-}
 async function commentWithKey2(ctx, messageKey, extra) {
   const text = formatMessage(ctx.compiled.messageTemplate(messageKey), {
-    url: urlFor(ctx),
-    issueKey: ctx.issueKey,
+    ...actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus),
     ...extra
   });
   await addIssueComment(ctx.jira, ctx.issueKey, text);
@@ -879,14 +879,17 @@ async function runTransitionAction(step, ctx) {
     if (step.commentWhenSkipped) {
       await commentWithKey2(ctx, step.commentWhenSkipped, {
         status: step.status,
-        env: ""
+        targetStatus: step.status
       });
     }
     return "skipped";
   }
   if (result.ok && !("skipped" in result)) {
     if (step.commentAfterSuccess) {
-      await commentWithKey2(ctx, step.commentAfterSuccess, {});
+      await commentWithKey2(ctx, step.commentAfterSuccess, {
+        status: result.to,
+        targetStatus: result.to
+      });
     }
     await runJiraSideEffects(step.extras, ctx);
     log.info(`${ctx.issueKey}: \u2192 ${step.status}`);
@@ -1268,6 +1271,7 @@ var ConfigBuilder = class {
   constructor(projectKey) {
     this.projectKey = projectKey;
   }
+  projectKey;
   rules = [];
   messageTemplates = {};
   syncOptions = { ...DEFAULT_SYNC_OPTIONS };

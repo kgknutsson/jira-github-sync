@@ -62,6 +62,7 @@ var ConfigBuilder = class {
   constructor(projectKey) {
     this.projectKey = projectKey;
   }
+  projectKey;
   rules = [];
   messageTemplates = {};
   syncOptions = { ...DEFAULT_SYNC_OPTIONS };

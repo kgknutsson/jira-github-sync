@@ -4,15 +4,12 @@
  * @module actions/transitionAction
  */
 import { addIssueComment, transitionIssueToStatus } from '../adapters/jira/client';
+import { actionTemplateVars } from '../utils/actionTemplateVars';
 import { formatMessage } from '../utils/formatMessage';
 import { log } from '../utils/logger';
 import type { TransitionStep } from '../config/types';
 import { runJiraSideEffects } from './jiraSideEffects';
 import type { ActionContext, ActionResult } from './types';
-
-function urlFor(ctx: ActionContext): string {
-  return ctx.event.event === 'workflow_run' ? ctx.event.runUrl : ctx.event.url;
-}
 
 async function commentWithKey(
   ctx: ActionContext,
@@ -20,8 +17,7 @@ async function commentWithKey(
   extra: Record<string, string>
 ): Promise<void> {
   const text = formatMessage(ctx.compiled.messageTemplate(messageKey), {
-    url: urlFor(ctx),
-    issueKey: ctx.issueKey,
+    ...actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus),
     ...extra,
   });
   await addIssueComment(ctx.jira, ctx.issueKey, text);
@@ -50,7 +46,7 @@ export async function runTransitionAction(
     if (step.commentWhenSkipped) {
       await commentWithKey(ctx, step.commentWhenSkipped, {
         status: step.status,
-        env: '',
+        targetStatus: step.status,
       });
     }
     return 'skipped';
@@ -58,7 +54,10 @@ export async function runTransitionAction(
 
   if (result.ok && !('skipped' in result)) {
     if (step.commentAfterSuccess) {
-      await commentWithKey(ctx, step.commentAfterSuccess, {});
+      await commentWithKey(ctx, step.commentAfterSuccess, {
+        status: result.to,
+        targetStatus: result.to,
+      });
     }
     await runJiraSideEffects(step.extras, ctx);
     log.info(`${ctx.issueKey}: → ${step.status}`);

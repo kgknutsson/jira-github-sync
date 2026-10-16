@@ -10,6 +10,7 @@ import {
   listWorkflowRunJobs,
   readGitHubAuthFromEnv,
 } from '../adapters/github/api';
+import { actionTemplateVars } from '../utils/actionTemplateVars';
 import { parseDeployEnvironment } from '../utils/deployEnvironment';
 import { formatMessage } from '../utils/formatMessage';
 import { log } from '../utils/logger';
@@ -22,10 +23,8 @@ async function commentWithKey(
   messageKey: string,
   extra: Record<string, string>
 ): Promise<void> {
-  if (ctx.event.event !== 'workflow_run') return;
   const text = formatMessage(ctx.compiled.messageTemplate(messageKey), {
-    url: ctx.event.runUrl,
-    issueKey: ctx.issueKey,
+    ...actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus),
     ...extra,
   });
   await addIssueComment(ctx.jira, ctx.issueKey, text);

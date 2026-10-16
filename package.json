@@ -14,12 +14,15 @@
   "scripts": {
     "build": "node build.mjs",
     "verify": "node dist/verify.mjs",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "qa": "node build.mjs && vitest run && node dist/verify.mjs"
+    "qa": "node build.mjs && tsc --noEmit && vitest run && node dist/verify.mjs"
   },
   "devDependencies": {
-    "esbuild": "0.25.9",
+    "@types/node": "20.19.43",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
     "vitest": "4.1.11"
   }
 }

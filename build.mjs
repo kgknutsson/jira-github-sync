@@ -1,8 +1,8 @@
 /**
  * Bundles TypeScript sources into committed `dist/run.mjs` and `dist/verify.mjs`.
  *
- * Resolves esbuild from this folder or the host repo root. After editing sync
- * sources, run `node build.mjs` and commit `dist/`.
+ * Resolves esbuild from this folder or, when vendored under `.github/workflows/<folder>/`,
+ * from the host repository root. After editing sync sources, run `node build.mjs` and commit `dist/`.
  *
  * @module build
  */
@@ -27,7 +27,7 @@ function loadEsbuild() {
     }
   }
   throw new Error(
-    'esbuild not found. At repo root: pnpm install. Or in this folder: pnpm install --ignore-workspace'
+    'esbuild not found. Run `npm ci` in this folder (or install esbuild at the host repo root).'
   );
 }
 
