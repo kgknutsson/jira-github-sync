@@ -229,7 +229,10 @@ export async function transitionIssueToStatus(
   };
 }
 
-/** Adds a remote link (e.g. GitHub PR) to the issue development panel. */
+/**
+ * Adds a remote (web) link, e.g. the GitHub PR, to the issue. Uses the URL as `globalId`, so
+ * Jira updates an existing link instead of creating a duplicate on repeated runs.
+ */
 export async function addIssueRemoteLink(
   config: JiraConfig,
   issueKey: string,
@@ -239,6 +242,8 @@ export async function addIssueRemoteLink(
   const res = await jiraFetch(config, `/rest/api/3/issue/${encodeURIComponent(issueKey)}/remotelink`, {
     method: 'POST',
     body: JSON.stringify({
+      // Jira caps globalId at 255 characters.
+      ...(url.length <= 255 ? { globalId: url } : {}),
       object: { url, title },
     }),
   });

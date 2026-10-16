@@ -27,6 +27,36 @@ async function githubApiGet<T>(auth: GitHubAuth, path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+type PullRequestApiItem = {
+  title: string;
+  body: string | null;
+  html_url: string;
+  merged_at: string | null;
+  draft?: boolean;
+  state: 'open' | 'closed';
+  /** `repo` is `null` when the head (fork) repository was deleted. */
+  head: { ref: string; repo: { full_name: string } | null };
+  base: { ref: string };
+  labels?: { name: string }[];
+  user?: { login?: string } | null;
+};
+
+function pullRequestFromApi(pr: PullRequestApiItem): PullRequestRef {
+  return {
+    title: pr.title,
+    headRef: pr.head.ref,
+    body: pr.body,
+    htmlUrl: pr.html_url,
+    merged: pr.merged_at != null,
+    draft: pr.draft ?? false,
+    state: pr.state,
+    baseRef: pr.base.ref,
+    headRepoFullName: pr.head.repo?.full_name ?? '',
+    labels: (pr.labels ?? []).map((l) => l.name),
+    authorLogin: pr.user?.login ?? '',
+  };
+}
+
 /** PRs GitHub associates with a commit SHA (for deploy / QG issue-key lookup). */
 export async function findPullRequestsForCommit(
   auth: GitHubAuth,
@@ -35,35 +65,26 @@ export async function findPullRequestsForCommit(
   const [owner, repo] = auth.repository.split('/');
   if (!owner || !repo) return [];
 
-  type PrListItem = {
-    title: string;
-    body: string | null;
-    html_url: string;
-    merged_at: string | null;
-    draft: boolean;
-    state: 'open' | 'closed';
-    head: { ref: string; repo: { full_name: string } };
-    base: { ref: string };
-  };
-
-  const pulls = await githubApiGet<PrListItem[]>(
+  const pulls = await githubApiGet<PullRequestApiItem[]>(
     auth,
     `/repos/${owner}/${repo}/commits/${commitSha}/pulls`
   );
+  return pulls.map(pullRequestFromApi);
+}
 
-  return pulls.map((pr) => ({
-    title: pr.title,
-    headRef: pr.head.ref,
-    body: pr.body,
-    htmlUrl: pr.html_url,
-    merged: pr.merged_at != null,
-    draft: pr.draft,
-    state: pr.state,
-    baseRef: pr.base.ref,
-    headRepoFullName: pr.head.repo.full_name,
-    labels: [],
-    authorLogin: '',
-  }));
+/** One pull request by number (PR details for `issue_comment` events). */
+export async function getPullRequest(
+  auth: GitHubAuth,
+  pullNumber: number
+): Promise<PullRequestRef | null> {
+  const [owner, repo] = auth.repository.split('/');
+  if (!owner || !repo) return null;
+
+  const pr = await githubApiGet<PullRequestApiItem>(
+    auth,
+    `/repos/${owner}/${repo}/pulls/${pullNumber}`
+  );
+  return pullRequestFromApi(pr);
 }
 
 /** Job names for a workflow run (used to parse deploy environment). */
@@ -82,8 +103,11 @@ export async function listWorkflowRunJobs(
   return data.jobs ?? [];
 }
 
-/** `false` when the PR head repo differs from the workflow repository (fork PR). */
-export function isSameRepositoryFork(pr: PullRequestRef, repository: string): boolean {
+/**
+ * `true` when the PR head branch lives in the workflow repository; `false` for fork PRs
+ * (including forks whose repository was deleted).
+ */
+export function isFromSameRepository(pr: PullRequestRef, repository: string): boolean {
   return pr.headRepoFullName === repository;
 }
 

@@ -95,6 +95,11 @@ export type PullRequestReviewWhenBuilder = RuleFinishBuilder &
     if(field: If.Action, ...values: ReviewAct[]): PullRequestReviewWhenBuilder;
     if(field: If.ReviewState, ...values: Review[]): PullRequestReviewWhenBuilder;
     if(field: If.PrState, ...values: Pr[]): PullRequestReviewWhenBuilder;
+    if(field: If.BaseRef, ...values: string[]): PullRequestReviewWhenBuilder;
+    if(field: If.HeadRef, ...values: string[]): PullRequestReviewWhenBuilder;
+    if(field: If.Label, ...values: string[]): PullRequestReviewWhenBuilder;
+    if(field: If.NotLabel, ...values: string[]): PullRequestReviewWhenBuilder;
+    if(field: If.Author, ...values: string[]): PullRequestReviewWhenBuilder;
   };
 
 export type WorkflowRunWhenBuilder = RuleFinishBuilder &

@@ -313,7 +313,11 @@ ${issues.map((i) => `- ${i.message}`).join("\n")}`
 function compileConfig(built, validate = true) {
   if (validate) assertValidConfig(built);
   const options = { ...DEFAULT_SYNC_OPTIONS, ...built.options };
-  const issueKeyPattern = new RegExp(String.raw`\b${built.projectKey}-\d+\b`, "gi");
+  const projectKey = built.projectKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const issueKeyPattern = new RegExp(
+    String.raw`(?<![A-Za-z0-9])${projectKey}-\d+(?![0-9])`,
+    "gi"
+  );
   return {
     built: { ...built, options },
     projectKey: built.projectKey,
@@ -390,6 +394,8 @@ function conditionsMatch(when, ctx, jiraStatus) {
       if (!matchValue(ctx.pr.baseRef, when.baseRef)) return false;
       if (!matchValue(ctx.pr.headRef, when.headRef)) return false;
       if (!matchLabels(ctx.pr, when)) return false;
+    } else if (when.baseRef !== void 0 || when.headRef !== void 0 || when.label !== void 0) {
+      return false;
     }
   }
   if (ctx.event === "push") {
@@ -1138,7 +1144,11 @@ var log = {
     }
   },
   error(message, err) {
-    console.error(`${PREFIX} ${message}`, err ?? "");
+    if (err !== void 0) {
+      console.error(`${PREFIX} ${message}`, err);
+    } else {
+      console.error(`${PREFIX} ${message}`);
+    }
   }
 };
 

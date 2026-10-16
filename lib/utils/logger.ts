@@ -1,7 +1,7 @@
 /**
  * Structured console logging for GitHub Actions (prefix `[jira-sync]`).
  *
- * @module logger
+ * @module utils/logger
  */
 
 const PREFIX = '[jira-sync]';
@@ -16,6 +16,10 @@ export const log = {
     }
   },
   error(message: string, err?: unknown): void {
-    console.error(`${PREFIX} ${message}`, err ?? '');
+    if (err !== undefined) {
+      console.error(`${PREFIX} ${message}`, err);
+    } else {
+      console.error(`${PREFIX} ${message}`);
+    }
   },
 };

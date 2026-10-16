@@ -10,7 +10,7 @@ type WorkflowRunPayload = {
   event: string;
   conclusion: string | null;
   head_sha: string;
-  head_branch: string;
+  head_branch: string | null;
   html_url: string;
   id: number;
 };
@@ -23,11 +23,16 @@ type PullRequestPayload = {
   merged_at?: string | null;
   draft: boolean;
   state?: 'open' | 'closed';
-  head: { ref: string; repo: { full_name: string } };
+  /** `repo` is `null` when the head (fork) repository was deleted. */
+  head: { ref: string; repo: { full_name: string } | null };
   base: { ref: string };
   labels?: { name: string }[];
   user?: { login?: string };
 };
+
+function stripHeadsPrefix(ref: string): string {
+  return ref.replace(/^refs\/heads\//, '');
+}
 
 function pullRequestFromPayload(pr: PullRequestPayload): PullRequestRef {
   const merged = pr.merged ?? (pr.merged_at != null && pr.merged_at !== '');
@@ -40,7 +45,7 @@ function pullRequestFromPayload(pr: PullRequestPayload): PullRequestRef {
     draft: pr.draft,
     state: pr.state === 'closed' ? 'closed' : 'open',
     baseRef: pr.base.ref,
-    headRepoFullName: pr.head.repo.full_name,
+    headRepoFullName: pr.head.repo?.full_name ?? '',
     labels: (pr.labels ?? []).map((l) => l.name),
     authorLogin: pr.user?.login ?? '',
   };
@@ -86,7 +91,8 @@ export type ParsedGitHubEvent =
       kind: 'issue_comment';
       action: string;
       body: string;
-      pr: PullRequestRef | null;
+      /** Set when the comment is on a pull request (the payload carries no PR details). */
+      pullRequestNumber: number | null;
       commentUrl: string;
     }
   | {
@@ -108,6 +114,7 @@ export type ParsedGitHubEvent =
       headRef: string;
       headSha: string;
       baseRef: string;
+      commitMessage: string;
     }
   | {
       kind: 'deployment_status';
@@ -158,9 +165,9 @@ export function parseGitHubEvent(eventName: string, payload: unknown): ParsedGit
       kind: 'workflow_run',
       workflowName: run.name,
       runEvent: run.event ?? 'unknown',
-      conclusion: run.conclusion,
+      conclusion: run.conclusion ?? null,
       headSha: run.head_sha,
-      headBranch: run.head_branch,
+      headBranch: run.head_branch ?? '',
       runUrl: run.html_url,
       runId: run.id,
     };
@@ -172,7 +179,7 @@ export function parseGitHubEvent(eventName: string, payload: unknown): ParsedGit
       check_suite?: {
         conclusion?: string | null;
         head_sha?: string;
-        head_branch?: string;
+        head_branch?: string | null;
         app?: { name?: string };
       };
     };
@@ -195,8 +202,8 @@ export function parseGitHubEvent(eventName: string, payload: unknown): ParsedGit
         conclusion?: string | null;
         name?: string;
         head_sha?: string;
-        head_branch?: string;
         html_url?: string;
+        check_suite?: { head_branch?: string | null };
       };
     };
     const run = p.check_run;
@@ -207,7 +214,7 @@ export function parseGitHubEvent(eventName: string, payload: unknown): ParsedGit
       conclusion: run.conclusion ?? null,
       checkName: run.name ?? 'check_run',
       headSha: run.head_sha,
-      headBranch: run.head_branch ?? '',
+      headBranch: run.check_suite?.head_branch ?? '',
       checkUrl: run.html_url ?? '',
     };
   }
@@ -216,16 +223,16 @@ export function parseGitHubEvent(eventName: string, payload: unknown): ParsedGit
     const p = payload as {
       action?: string;
       comment?: { body?: string; html_url?: string };
-      issue?: { pull_request?: unknown; title?: string; body?: string | null };
-      pull_request?: PullRequestPayload;
+      issue?: { number?: number; pull_request?: unknown };
     };
     if (!p.action || !p.comment?.body) return null;
-    const prPayload = p.pull_request;
+    const issueNumber = p.issue?.number;
+    const onPullRequest = p.issue?.pull_request != null && typeof issueNumber === 'number';
     return {
       kind: 'issue_comment',
       action: p.action,
       body: p.comment.body,
-      pr: prPayload ? pullRequestFromPayload(prPayload) : null,
+      pullRequestNumber: onPullRequest ? issueNumber : null,
       commentUrl: p.comment.html_url ?? '',
     };
   }
@@ -248,14 +255,14 @@ export function parseGitHubEvent(eventName: string, payload: unknown): ParsedGit
   if (eventName === 'release') {
     const p = payload as {
       action?: string;
-      release?: { tag_name?: string; name?: string; html_url?: string };
+      release?: { tag_name?: string; name?: string | null; html_url?: string };
     };
     if (!p.action || !p.release?.tag_name) return null;
     return {
       kind: 'release',
       action: p.action,
       tagName: p.release.tag_name,
-      releaseName: p.release.name ?? p.release.tag_name,
+      releaseName: p.release.name || p.release.tag_name,
       releaseUrl: p.release.html_url ?? '',
     };
   }
@@ -263,16 +270,22 @@ export function parseGitHubEvent(eventName: string, payload: unknown): ParsedGit
   if (eventName === 'merge_group') {
     const p = payload as {
       action?: string;
-      merge_group?: { head_ref?: string; head_sha?: string; base_ref?: string };
+      merge_group?: {
+        head_ref?: string;
+        head_sha?: string;
+        base_ref?: string;
+        head_commit?: { message?: string } | null;
+      };
     };
     const mg = p.merge_group;
     if (!p.action || !mg?.head_sha) return null;
     return {
       kind: 'merge_group',
       action: p.action,
-      headRef: mg.head_ref ?? '',
+      headRef: stripHeadsPrefix(mg.head_ref ?? ''),
       headSha: mg.head_sha,
-      baseRef: mg.base_ref ?? '',
+      baseRef: stripHeadsPrefix(mg.base_ref ?? ''),
+      commitMessage: mg.head_commit?.message ?? '',
     };
   }
 

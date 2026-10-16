@@ -22,7 +22,7 @@ export function parseDeployEnvironment(
 ): string | null {
   for (const job of jobs) {
     const match = job.name.match(jobNamePattern);
-    if (match?.[1] && match[1] in validEnvKeys) {
+    if (match?.[1] && Object.hasOwn(validEnvKeys, match[1])) {
       return match[1];
     }
   }
@@ -32,5 +32,5 @@ export function parseDeployEnvironment(
   }
 
   const branch = (headBranch ?? '').trim();
-  return branchToEnv[branch] ?? null;
+  return Object.hasOwn(branchToEnv, branch) ? branchToEnv[branch]! : null;
 }

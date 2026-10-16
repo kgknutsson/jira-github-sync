@@ -6,54 +6,43 @@
  * @module utils/issueKey
  */
 
+type IssueKeyParts = {
+  title?: string | null;
+  branch?: string | null;
+  body?: string | null;
+  commitMessage?: string | null;
+};
+
 /** Factory for ordered issue-key extraction using a project-specific regex. */
-export function createIssueKeyExtractor(projectKey: string, pattern: RegExp) {
-  const normalize = (raw: string) => normalizeIssueKey(raw, projectKey);
+export function createIssueKeyExtractor(pattern: RegExp) {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
 
-  return {
-    extract(parts: {
-      title?: string | null;
-      branch?: string | null;
-      body?: string | null;
-      commitMessage?: string | null;
-    }): string | null {
-      const keys = this.extractAll(parts);
-      return keys[0] ?? null;
-    },
-
-    extractAll(parts: {
-      title?: string | null;
-      branch?: string | null;
-      body?: string | null;
-      commitMessage?: string | null;
-    }): string[] {
-      const ordered = [parts.title, parts.body, parts.commitMessage, parts.branch];
-      const seen = new Set<string>();
-      const keys: string[] = [];
-      for (const text of ordered) {
-        if (!text) continue;
-        const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
-        const re = new RegExp(pattern.source, flags);
-        for (const match of text.matchAll(re)) {
-          const key = normalize(match[0]);
-          if (!seen.has(key)) {
-            seen.add(key);
-            keys.push(key);
-          }
+  const extractAll = (parts: IssueKeyParts): string[] => {
+    const ordered = [parts.title, parts.body, parts.commitMessage, parts.branch];
+    const seen = new Set<string>();
+    const keys: string[] = [];
+    for (const text of ordered) {
+      if (!text) continue;
+      for (const match of text.matchAll(new RegExp(pattern.source, flags))) {
+        const key = normalizeIssueKey(match[0]);
+        if (!seen.has(key)) {
+          seen.add(key);
+          keys.push(key);
         }
       }
-      return keys;
-    },
+    }
+    return keys;
+  };
+
+  return {
+    extract: (parts: IssueKeyParts): string | null => extractAll(parts)[0] ?? null,
+    extractAll,
   };
 }
 
-/** Uppercases and normalizes a matched key to `PROJECT-123` form. */
-export function normalizeIssueKey(raw: string, projectKey: string): string {
-  const upper = raw.toUpperCase();
-  if (!upper.startsWith(`${projectKey}-`)) {
-    return upper;
-  }
-  return upper;
+/** Uppercases a matched key to Jira's `PROJECT-123` form. */
+export function normalizeIssueKey(raw: string): string {
+  return raw.toUpperCase();
 }
 
 /** Case-insensitive check for {@link SyncOptions.skipMarker}. */

@@ -81,6 +81,12 @@ export function conditionsMatch(
       if (!matchValue(ctx.pr.baseRef, when.baseRef)) return false;
       if (!matchValue(ctx.pr.headRef, when.headRef)) return false;
       if (!matchLabels(ctx.pr, when)) return false;
+    } else if (
+      when.baseRef !== undefined ||
+      when.headRef !== undefined ||
+      when.label !== undefined
+    ) {
+      return false;
     }
   }
 

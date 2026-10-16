@@ -53,10 +53,10 @@
  * .deployToJiraStatus({ commentAfterSuccess: 'deploySuccess' })
  * ```
  *
- * @example Check suite — CI failed while issue is In Review
+ * @example Check suite — third-party CI failed while issue is In Review
  * ```ts
  * .when(When.CheckSuite)
- * .if(If.CheckName, 'GitHub Actions')
+ * .if(If.CheckName, 'CircleCI Checks')
  * .if(If.Conclusion, CheckEnd.Failure)
  * .ifJiraStatus('In Review')
  * .transitionTo('In Progress', { via: ['Rework'] })
@@ -89,7 +89,8 @@ export enum When {
   /**
    * **GitHub source:** `pull_request_review` webhook.
    * **Use with:** {@link If.Action} + {@link ReviewAct}, {@link If.ReviewState} + {@link Review},
-   * {@link If.PrState}, {@link If.BaseRef}, {@link If.HeadRef}, {@link If.Label}, {@link If.NotLabel}.
+   * {@link If.PrState}, {@link If.BaseRef}, {@link If.HeadRef}, {@link If.Label}, {@link If.NotLabel},
+   * {@link If.Author}.
    */
   PullRequestReview = 'pull_request_review',
 
@@ -104,19 +105,26 @@ export enum When {
    * **GitHub source:** `check_suite` webhook (all checks for a commit).
    * **Use with:** {@link If.CheckName}, {@link If.Conclusion} + {@link CheckEnd}, {@link If.Action}
    * (usually `completed`). Issue keys resolved from linked PRs / commit message like `workflow_run`.
+   *
+   * GitHub never triggers workflows for check suites created by GitHub Actions (or for head SHAs
+   * associated with Actions), so this only sees third-party CI apps. For Actions CI use
+   * {@link When.WorkflowRun}.
    */
   CheckSuite = 'check_suite',
 
   /**
    * **GitHub source:** `check_run` webhook (single check job).
    * **Use with:** Same as {@link When.CheckSuite} — {@link If.CheckName}, {@link If.Conclusion} + {@link CheckEnd}.
+   * Same GitHub limitation: check runs from GitHub Actions never trigger workflows.
    */
   CheckRun = 'check_run',
 
   /**
    * **GitHub source:** `issue_comment` on an issue or PR.
-   * **Use with:** {@link If.Action} (`created`, `edited`), optional {@link If.BaseRef} / {@link If.Label} when PR
-   * payload is present. Keys extracted from comment body (+ PR title/body when available).
+   * **Use with:** {@link If.Action} (`created`, `edited`). On PR comments the engine fetches the PR
+   * (needs `GITHUB_TOKEN` + `pull-requests: read`) so {@link If.BaseRef}, {@link If.HeadRef},
+   * {@link If.Label}, {@link If.NotLabel} work; rules with those filters never match plain issue
+   * comments. Keys extracted from comment body (+ PR title/body/branch on PR comments).
    */
   IssueComment = 'issue_comment',
 
@@ -128,13 +136,15 @@ export enum When {
 
   /**
    * **GitHub source:** `release` lifecycle.
-   * **Use with:** {@link If.Action} + {@link ReleaseAct}, {@link If.ReleaseTag} (string or pattern via multiple values).
+   * **Use with:** {@link If.Action} + {@link ReleaseAct}, {@link If.ReleaseTag} (exact tag names; list
+   * several values to match any of them).
    */
   Release = 'release',
 
   /**
    * **GitHub source:** merge queue (`merge_group`).
-   * **Use with:** {@link If.Action}, {@link If.BaseRef}, {@link If.HeadRef}. Keys from branch / associated commits.
+   * **Use with:** {@link If.Action}, {@link If.BaseRef}, {@link If.HeadRef} (branch names without
+   * `refs/heads/`). Keys from the merge group's head commit message (and head ref).
    */
   MergeGroup = 'merge_group',
 
@@ -160,8 +170,12 @@ export enum When {
  * | Workflow | WorkflowRun |
  * | RunEvent | WorkflowRun |
  * | Conclusion | WorkflowRun, CheckSuite, CheckRun |
- * | PrState, Merged, Draft | PullRequest, PullRequestReview |
- * | BaseRef, HeadRef, Label, NotLabel, Author | PullRequest, PullRequestReview, IssueComment (if PR) |
+ * | PrState | PullRequest, PullRequestReview |
+ * | Merged, Draft | PullRequest |
+ * | BaseRef | PullRequest, PullRequestReview, IssueComment (PR comments), MergeGroup |
+ * | HeadRef | PullRequest, PullRequestReview, IssueComment (PR comments), MergeGroup, Push |
+ * | Label, NotLabel | PullRequest, PullRequestReview, IssueComment (PR comments) |
+ * | Author | PullRequest, PullRequestReview |
  * | CheckName | CheckSuite, CheckRun |
  * | DeploymentEnvironment, DeploymentState | DeploymentStatus |
  * | ReleaseTag | Release |
@@ -240,17 +254,19 @@ export enum If {
   Draft = 'draft',
 
   /**
-   * **GitHub source:** `pull_request.base.ref` (target branch: `dev`, `test`, `main`, …).
+   * **GitHub source:** `pull_request.base.ref` (target branch: `dev`, `test`, `main`, …) or
+   * `merge_group.base_ref` (without `refs/heads/` prefix in rules).
    */
   BaseRef = 'baseRef',
 
   /**
-   * **GitHub source:** `pull_request.head.ref` or push branch (without `refs/heads/` prefix in rules).
+   * **GitHub source:** `pull_request.head.ref`, push branch, or `merge_group.head_ref`
+   * (without `refs/heads/` prefix in rules).
    */
   HeadRef = 'headRef',
 
   /**
-   * **GitHub source:** PR label name — issue must have at least one listed label.
+   * **GitHub source:** PR label name — the PR must have at least one listed label.
    * **Values:** plain strings (label names in GitHub).
    */
   Label = 'label',
@@ -269,7 +285,8 @@ export enum If {
 
   /**
    * **GitHub source:** `check_suite.app.name` or `check_run.name`.
-   * **Values:** plain strings (e.g. `'GitHub Actions'`, `'Quality Gate'`).
+   * **Values:** plain strings from third-party CI apps (e.g. `'CircleCI Checks'`). Suites and runs
+   * created by GitHub Actions never trigger workflows, so `'GitHub Actions'` never matches.
    */
   CheckName = 'checkName',
 
@@ -299,7 +316,7 @@ export enum If {
  *
  * **Use with:** `.when(When.WorkflowRun)` + `.if(If.Conclusion, RunEnd.…)`.
  *
- * @see https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepsconclusion
+ * @see https://docs.github.com/en/webhooks/webhook-events-and-payloads#workflow_run
  *
  * @example Deploy failure comment (multiple conclusions)
  * ```ts
@@ -316,6 +333,8 @@ export enum RunEnd {
   Cancelled = 'cancelled',
   /** Wire value `'timed_out'` — run hit a timeout. */
   TimedOut = 'timed_out',
+  /** Wire value `'startup_failure'` — run could not start (e.g. invalid workflow file). */
+  StartupFailure = 'startup_failure',
 }
 
 /**
@@ -461,7 +480,7 @@ export enum RunTrigger {
  * **GitHub source:** `check_suite.conclusion` / `check_run.conclusion`.
  *
  * **Use with:** `.when(When.CheckSuite | When.CheckRun)` + `.if(If.Conclusion, CheckEnd.…)`.
- * Same string set as {@link RunEnd} plus neutral/skipped/action_required.
+ * Same string set as {@link RunEnd} plus neutral/skipped/action_required/stale.
  *
  * @example Failed check suite
  * ```ts
@@ -484,6 +503,10 @@ export enum CheckEnd {
   Skipped = 'skipped',
   /** Wire value `'action_required'`. */
   ActionRequired = 'action_required',
+  /** Wire value `'stale'`. */
+  Stale = 'stale',
+  /** Wire value `'startup_failure'`. */
+  StartupFailure = 'startup_failure',
 }
 
 /**
@@ -543,7 +566,7 @@ export enum ReleaseAct {
 }
 
 /**
- * **Engine constant** — conclusions that should all appear on the “deploy failed → comment” rule.
+ * **Engine constant** — conclusions every deploy “failed → comment” rule should list.
  *
  * **Not a DSL enum.** Used by static audits (`syncAudit.ts`). In `settings.ts` list the same
  * {@link RunEnd} values explicitly on `.if(If.Conclusion, …)`.

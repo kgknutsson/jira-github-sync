@@ -19,8 +19,6 @@ const args = new Set(process.argv.slice(2));
 const validateOnly = args.has('--validate-config');
 const preflight = args.has('--preflight');
 
-const compiled = compileConfig(builtSyncConfig);
-
 function printConfigValidation(): boolean {
   const issues = validateBuiltSyncConfig(builtSyncConfig);
   for (const issue of issues) {
@@ -48,13 +46,14 @@ async function runPreflight(): Promise<void> {
   const { accountId } = await verifyJiraConnection(jira);
   log.info(`Jira auth OK (accountId ${accountId})`);
 
-  for (const issue of await validateJiraStringsAgainstProject(jira, builtSyncConfig)) {
+  const preflightIssues = await validateJiraStringsAgainstProject(jira, builtSyncConfig);
+  for (const issue of preflightIssues) {
     const fn = issue.level === 'error' ? log.error : log.info;
     fn(`[jira preflight ${issue.level}] ${issue.message}`);
-    if (issue.level === 'error') process.exit(1);
   }
+  if (preflightIssues.some((issue) => issue.level === 'error')) process.exit(1);
   log.info('Jira status preflight OK');
-  log.info(`Deploy map: ${JSON.stringify(compiled.deployEnvToStatus)}`);
+  log.info(`Deploy map: ${JSON.stringify(builtSyncConfig.deploy.environmentToJiraStatus)}`);
 }
 
 function contextFromParsed(
@@ -116,7 +115,8 @@ function contextFromParsed(
         event: 'issue_comment',
         action: parsed.action,
         body: parsed.body,
-        pr: parsed.pr,
+        pullRequestNumber: parsed.pullRequestNumber,
+        pr: null,
         repository,
         url: parsed.commentUrl,
       };
@@ -144,6 +144,7 @@ function contextFromParsed(
         headRef: parsed.headRef,
         headSha: parsed.headSha,
         baseRef: parsed.baseRef,
+        commitMessage: parsed.commitMessage,
         repository,
       };
     case 'deployment_status':
@@ -178,11 +179,12 @@ async function main(): Promise<void> {
 
   if (!eventName || !eventPath) {
     log.info('Not running in GitHub Actions (missing event env); exit 0');
-    log.info('Local verify: pnpm verify:jira-sync');
-    log.info('Jira preflight: node .github/workflows/jira-sync/dist/verify.mjs --preflight');
+    log.info('Local checks: node dist/verify.mjs (from the jira-sync package folder)');
+    log.info('Jira preflight: node dist/verify.mjs --preflight (needs JIRA_* env)');
     return;
   }
 
+  const compiled = compileConfig(builtSyncConfig);
   const payload = JSON.parse(readFileSync(eventPath, 'utf8')) as unknown;
   const parsed = parseGitHubEvent(eventName, payload);
   if (!parsed) {
@@ -190,7 +192,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (!repository) return;
+  if (!repository) {
+    log.info('GITHUB_REPOSITORY not set; skipping');
+    return;
+  }
   const ctx = contextFromParsed(parsed, repository);
   if (!ctx) return;
 

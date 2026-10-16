@@ -2,6 +2,9 @@
 import { readFileSync } from "node:fs";
 
 // lib/adapters/github/parseEvent.ts
+function stripHeadsPrefix(ref) {
+  return ref.replace(/^refs\/heads\//, "");
+}
 function pullRequestFromPayload(pr) {
   const merged = pr.merged ?? (pr.merged_at != null && pr.merged_at !== "");
   return {
@@ -13,7 +16,7 @@ function pullRequestFromPayload(pr) {
     draft: pr.draft,
     state: pr.state === "closed" ? "closed" : "open",
     baseRef: pr.base.ref,
-    headRepoFullName: pr.head.repo.full_name,
+    headRepoFullName: pr.head.repo?.full_name ?? "",
     labels: (pr.labels ?? []).map((l) => l.name),
     authorLogin: pr.user?.login ?? ""
   };
@@ -46,9 +49,9 @@ function parseGitHubEvent(eventName, payload) {
       kind: "workflow_run",
       workflowName: run.name,
       runEvent: run.event ?? "unknown",
-      conclusion: run.conclusion,
+      conclusion: run.conclusion ?? null,
       headSha: run.head_sha,
-      headBranch: run.head_branch,
+      headBranch: run.head_branch ?? "",
       runUrl: run.html_url,
       runId: run.id
     };
@@ -76,19 +79,20 @@ function parseGitHubEvent(eventName, payload) {
       conclusion: run.conclusion ?? null,
       checkName: run.name ?? "check_run",
       headSha: run.head_sha,
-      headBranch: run.head_branch ?? "",
+      headBranch: run.check_suite?.head_branch ?? "",
       checkUrl: run.html_url ?? ""
     };
   }
   if (eventName === "issue_comment") {
     const p = payload;
     if (!p.action || !p.comment?.body) return null;
-    const prPayload = p.pull_request;
+    const issueNumber = p.issue?.number;
+    const onPullRequest = p.issue?.pull_request != null && typeof issueNumber === "number";
     return {
       kind: "issue_comment",
       action: p.action,
       body: p.comment.body,
-      pr: prPayload ? pullRequestFromPayload(prPayload) : null,
+      pullRequestNumber: onPullRequest ? issueNumber : null,
       commentUrl: p.comment.html_url ?? ""
     };
   }
@@ -109,7 +113,7 @@ function parseGitHubEvent(eventName, payload) {
       kind: "release",
       action: p.action,
       tagName: p.release.tag_name,
-      releaseName: p.release.name ?? p.release.tag_name,
+      releaseName: p.release.name || p.release.tag_name,
       releaseUrl: p.release.html_url ?? ""
     };
   }
@@ -120,9 +124,10 @@ function parseGitHubEvent(eventName, payload) {
     return {
       kind: "merge_group",
       action: p.action,
-      headRef: mg.head_ref ?? "",
+      headRef: stripHeadsPrefix(mg.head_ref ?? ""),
       headSha: mg.head_sha,
-      baseRef: mg.base_ref ?? ""
+      baseRef: stripHeadsPrefix(mg.base_ref ?? ""),
+      commitMessage: mg.head_commit?.message ?? ""
     };
   }
   if (eventName === "deployment_status") {
@@ -330,6 +335,8 @@ async function addIssueRemoteLink(config2, issueKey, url, title) {
   const res = await jiraFetch(config2, `/rest/api/3/issue/${encodeURIComponent(issueKey)}/remotelink`, {
     method: "POST",
     body: JSON.stringify({
+      // Jira caps globalId at 255 characters.
+      ...url.length <= 255 ? { globalId: url } : {},
       object: { url, title }
     })
   });
@@ -509,7 +516,11 @@ ${issues.map((i) => `- ${i.message}`).join("\n")}`
 function compileConfig(built, validate = true) {
   if (validate) assertValidConfig(built);
   const options = { ...DEFAULT_SYNC_OPTIONS, ...built.options };
-  const issueKeyPattern = new RegExp(String.raw`\b${built.projectKey}-\d+\b`, "gi");
+  const projectKey = built.projectKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const issueKeyPattern = new RegExp(
+    String.raw`(?<![A-Za-z0-9])${projectKey}-\d+(?![0-9])`,
+    "gi"
+  );
   return {
     built: { ...built, options },
     projectKey: built.projectKey,
@@ -544,6 +555,21 @@ async function githubApiGet(auth, path) {
   if (!res.ok) throw new Error(`GitHub API ${path} failed (${res.status})`);
   return res.json();
 }
+function pullRequestFromApi(pr) {
+  return {
+    title: pr.title,
+    headRef: pr.head.ref,
+    body: pr.body,
+    htmlUrl: pr.html_url,
+    merged: pr.merged_at != null,
+    draft: pr.draft ?? false,
+    state: pr.state,
+    baseRef: pr.base.ref,
+    headRepoFullName: pr.head.repo?.full_name ?? "",
+    labels: (pr.labels ?? []).map((l) => l.name),
+    authorLogin: pr.user?.login ?? ""
+  };
+}
 async function findPullRequestsForCommit(auth, commitSha) {
   const [owner, repo] = auth.repository.split("/");
   if (!owner || !repo) return [];
@@ -551,19 +577,16 @@ async function findPullRequestsForCommit(auth, commitSha) {
     auth,
     `/repos/${owner}/${repo}/commits/${commitSha}/pulls`
   );
-  return pulls.map((pr) => ({
-    title: pr.title,
-    headRef: pr.head.ref,
-    body: pr.body,
-    htmlUrl: pr.html_url,
-    merged: pr.merged_at != null,
-    draft: pr.draft,
-    state: pr.state,
-    baseRef: pr.base.ref,
-    headRepoFullName: pr.head.repo.full_name,
-    labels: [],
-    authorLogin: ""
-  }));
+  return pulls.map(pullRequestFromApi);
+}
+async function getPullRequest(auth, pullNumber) {
+  const [owner, repo] = auth.repository.split("/");
+  if (!owner || !repo) return null;
+  const pr = await githubApiGet(
+    auth,
+    `/repos/${owner}/${repo}/pulls/${pullNumber}`
+  );
+  return pullRequestFromApi(pr);
 }
 async function listWorkflowRunJobs(auth, runId) {
   const [owner, repo] = auth.repository.split("/");
@@ -574,7 +597,7 @@ async function listWorkflowRunJobs(auth, runId) {
   );
   return data.jobs ?? [];
 }
-function isSameRepositoryFork(pr, repository) {
+function isFromSameRepository(pr, repository) {
   return pr.headRepoFullName === repository;
 }
 async function getCommitMessage(auth, commitSha) {
@@ -589,7 +612,10 @@ async function getCommitMessage(auth, commitSha) {
 
 // lib/utils/formatMessage.ts
 function formatMessage(template, vars) {
-  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? `{${key}}`);
+  return template.replace(
+    /\{(\w+)\}/g,
+    (_, key) => (Object.hasOwn(vars, key) ? vars[key] : void 0) ?? `{${key}}`
+  );
 }
 
 // lib/utils/actionTemplateVars.ts
@@ -689,7 +715,11 @@ var log = {
     }
   },
   error(message, err) {
-    console.error(`${PREFIX} ${message}`, err ?? "");
+    if (err !== void 0) {
+      console.error(`${PREFIX} ${message}`, err);
+    } else {
+      console.error(`${PREFIX} ${message}`);
+    }
   }
 };
 
@@ -743,7 +773,7 @@ async function runCommentAction(step, ctx) {
 function parseDeployEnvironment(jobs, headBranch, jobNamePattern, branchToEnv, validEnvKeys, options) {
   for (const job of jobs) {
     const match = job.name.match(jobNamePattern);
-    if (match?.[1] && match[1] in validEnvKeys) {
+    if (match?.[1] && Object.hasOwn(validEnvKeys, match[1])) {
       return match[1];
     }
   }
@@ -751,7 +781,7 @@ function parseDeployEnvironment(jobs, headBranch, jobNamePattern, branchToEnv, v
     return null;
   }
   const branch = (headBranch ?? "").trim();
-  return branchToEnv[branch] ?? null;
+  return Object.hasOwn(branchToEnv, branch) ? branchToEnv[branch] : null;
 }
 
 // lib/actions/deployAction.ts
@@ -916,39 +946,31 @@ async function executeAction(step, ctx) {
 }
 
 // lib/utils/issueKey.ts
-function createIssueKeyExtractor(projectKey, pattern) {
-  const normalize = (raw) => normalizeIssueKey(raw, projectKey);
-  return {
-    extract(parts) {
-      const keys = this.extractAll(parts);
-      return keys[0] ?? null;
-    },
-    extractAll(parts) {
-      const ordered = [parts.title, parts.body, parts.commitMessage, parts.branch];
-      const seen = /* @__PURE__ */ new Set();
-      const keys = [];
-      for (const text of ordered) {
-        if (!text) continue;
-        const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-        const re = new RegExp(pattern.source, flags);
-        for (const match of text.matchAll(re)) {
-          const key = normalize(match[0]);
-          if (!seen.has(key)) {
-            seen.add(key);
-            keys.push(key);
-          }
+function createIssueKeyExtractor(pattern) {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const extractAll = (parts) => {
+    const ordered = [parts.title, parts.body, parts.commitMessage, parts.branch];
+    const seen = /* @__PURE__ */ new Set();
+    const keys = [];
+    for (const text of ordered) {
+      if (!text) continue;
+      for (const match of text.matchAll(new RegExp(pattern.source, flags))) {
+        const key = normalizeIssueKey(match[0]);
+        if (!seen.has(key)) {
+          seen.add(key);
+          keys.push(key);
         }
       }
-      return keys;
     }
+    return keys;
+  };
+  return {
+    extract: (parts) => extractAll(parts)[0] ?? null,
+    extractAll
   };
 }
-function normalizeIssueKey(raw, projectKey) {
-  const upper = raw.toUpperCase();
-  if (!upper.startsWith(`${projectKey}-`)) {
-    return upper;
-  }
-  return upper;
+function normalizeIssueKey(raw) {
+  return raw.toUpperCase();
 }
 function textContainsSkipMarker(text, marker) {
   if (!marker) return false;
@@ -1015,6 +1037,8 @@ function conditionsMatch(when, ctx, jiraStatus) {
       if (!matchValue(ctx.pr.baseRef, when.baseRef)) return false;
       if (!matchValue(ctx.pr.headRef, when.headRef)) return false;
       if (!matchLabels(ctx.pr, when)) return false;
+    } else if (when.baseRef !== void 0 || when.headRef !== void 0 || when.label !== void 0) {
+      return false;
     }
   }
   if (ctx.event === "push") {
@@ -1056,7 +1080,8 @@ var TERMINAL_CONCLUSIONS = /* @__PURE__ */ new Set([
   "action_required",
   "neutral",
   "skipped",
-  "stale"
+  "stale",
+  "startup_failure"
 ]);
 function shouldProcessTerminalConclusion(label, conclusion, action) {
   if (action !== "completed") {
@@ -1078,6 +1103,15 @@ function shouldProcessWorkflowRun(ctx) {
 }
 function shouldProcessCheck(ctx) {
   return shouldProcessTerminalConclusion(ctx.event, ctx.conclusion, ctx.action);
+}
+async function withPullRequest(ctx) {
+  if (ctx.event !== "issue_comment" || ctx.pr || ctx.pullRequestNumber == null) return ctx;
+  const gh = readGitHubAuthFromEnv();
+  if (!gh) {
+    log.info("GITHUB_TOKEN not set; PR comment handled without PR details");
+    return ctx;
+  }
+  return { ...ctx, pr: await getPullRequest(gh, ctx.pullRequestNumber) };
 }
 function skipTextsForPullRequest(ctx) {
   return [ctx.pr.title, ctx.pr.body ?? "", ctx.pr.headRef];
@@ -1121,20 +1155,20 @@ async function skipTextsForContext(ctx) {
     case "release":
       return [ctx.tagName, ctx.releaseName];
     case "merge_group":
-      return [ctx.headRef, ctx.baseRef];
+      return [ctx.commitMessage, ctx.headRef, ctx.baseRef];
     default:
       return [];
   }
 }
-async function resolveIssueKeys(compiled2, ctx) {
-  const keyExtractor = createIssueKeyExtractor(compiled2.projectKey, compiled2.issueKeyPattern);
+async function resolveIssueKeys(compiled, ctx) {
+  const keyExtractor = createIssueKeyExtractor(compiled.issueKeyPattern);
   if (ctx.event === "workflow_run" || ctx.event === "check_suite" || ctx.event === "check_run" || ctx.event === "deployment_status") {
     const branch = ctx.event === "deployment_status" ? ctx.ref.replace(/^refs\/heads\//, "") : ctx.headBranch;
     return resolveIssueKeysForWorkflowRun(
       ctx.headSha,
       branch,
       (parts) => keyExtractor.extractAll(parts),
-      { resolveKeyFromCommitMessage: compiled2.options.resolveKeyFromCommitMessage }
+      { resolveKeyFromCommitMessage: compiled.options.resolveKeyFromCommitMessage }
     );
   }
   if (ctx.event === "push") {
@@ -1162,7 +1196,7 @@ ${ctx.pr.body ?? ""}`
     });
   }
   if (ctx.event === "merge_group") {
-    return keyExtractor.extractAll({ branch: ctx.headRef, title: ctx.headRef });
+    return keyExtractor.extractAll({ commitMessage: ctx.commitMessage, branch: ctx.headRef });
   }
   if (ctx.event === "pull_request" || ctx.event === "pull_request_review") {
     return keyExtractor.extractAll({
@@ -1173,7 +1207,7 @@ ${ctx.pr.body ?? ""}`
   }
   return [];
 }
-async function syncOneIssue(compiled2, ctx, jira, issueKey) {
+async function syncOneIssue(compiled, ctx, jira, issueKey) {
   let jiraStatus;
   try {
     jiraStatus = await getIssueStatusName(jira, issueKey);
@@ -1184,7 +1218,7 @@ async function syncOneIssue(compiled2, ctx, jira, issueKey) {
     }
     throw err;
   }
-  const rule = findMatchingRule(compiled2.built, ctx, jiraStatus);
+  const rule = findMatchingRule(compiled.built, ctx, jiraStatus);
   if (!rule) {
     log.info(`No rule matched (${ctx.event}) for ${issueKey}`);
     return;
@@ -1192,20 +1226,21 @@ async function syncOneIssue(compiled2, ctx, jira, issueKey) {
   log.info(`Rule: ${rule.name} [${rule.id}] \u2192 ${issueKey}`);
   await executeAction(rule.then, {
     jira,
-    compiled: compiled2,
+    compiled,
     issueKey,
     event: ctx,
     jiraStatus
   });
 }
-async function runSyncForContext(compiled2, ctx) {
+async function runSyncForContext(compiled, eventCtx) {
+  const ctx = await withPullRequest(eventCtx);
   if (ctx.event === "pull_request" || ctx.event === "pull_request_review") {
-    if (!isSameRepositoryFork(ctx.pr, ctx.repository)) {
+    if (!isFromSameRepository(ctx.pr, ctx.repository)) {
       log.info("Skipping fork pull request");
       return;
     }
   }
-  if (ctx.event === "issue_comment" && ctx.pr && !isSameRepositoryFork(ctx.pr, ctx.repository)) {
+  if (ctx.event === "issue_comment" && ctx.pr && !isFromSameRepository(ctx.pr, ctx.repository)) {
     log.info("Skipping fork pull request comment");
     return;
   }
@@ -1217,10 +1252,9 @@ async function runSyncForContext(compiled2, ctx) {
   }
   if (ctx.event === "workflow_run" || ctx.event === "check_suite" || ctx.event === "check_run") {
     const gh = readGitHubAuthFromEnv();
-    const headSha = ctx.event === "workflow_run" ? ctx.headSha : ctx.headSha;
     if (gh) {
-      const prs = await findPullRequestsForCommit(gh, headSha);
-      if (prs.some((pr) => !isSameRepositoryFork(pr, gh.repository))) {
+      const prs = await findPullRequestsForCommit(gh, ctx.headSha);
+      if (prs.some((pr) => !isFromSameRepository(pr, gh.repository))) {
         log.info(`Skipping ${ctx.event} linked to a fork pull request`);
         return;
       }
@@ -1231,7 +1265,7 @@ async function runSyncForContext(compiled2, ctx) {
     log.info("Jira secrets not configured; skipping");
     return;
   }
-  const marker = compiled2.options.skipMarker;
+  const marker = compiled.options.skipMarker;
   if (marker) {
     const texts = await skipTextsForContext(ctx);
     if (texts.some((t) => textContainsSkipMarker(t, marker))) {
@@ -1239,29 +1273,25 @@ async function runSyncForContext(compiled2, ctx) {
       return;
     }
   }
-  const issueKeys = await resolveIssueKeys(compiled2, ctx);
+  const issueKeys = await resolveIssueKeys(compiled, ctx);
   if (issueKeys.length === 0) {
-    log.info(`No ${compiled2.projectKey} issue key for event`);
+    log.info(`No ${compiled.projectKey} issue key for event`);
     return;
   }
   let keysToProcess = issueKeys;
-  if (!compiled2.options.processAllMatchingIssueKeys && keysToProcess.length > 1) {
+  if (!compiled.options.processAllMatchingIssueKeys && keysToProcess.length > 1) {
     keysToProcess = [keysToProcess[0]];
   }
-  const failOnJiraError = compiled2.options.failOnJiraError;
   for (const issueKey of keysToProcess) {
     try {
-      await syncOneIssue(compiled2, ctx, jira, issueKey);
+      await syncOneIssue(compiled, ctx, jira, issueKey);
     } catch (err) {
       if (err instanceof JiraIssueNotFoundError) {
         log.info(`Issue ${issueKey} not found; skipping`);
         continue;
       }
       log.error(`Jira sync failed for ${issueKey}`, err);
-      if (failOnJiraError) {
-        if (err instanceof JiraApiError) throw err;
-        throw err;
-      }
+      if (compiled.options.failOnJiraError) throw err;
     }
   }
 }
@@ -1429,7 +1459,6 @@ var builtSyncConfig = config("PROJ").options({
 var args = new Set(process.argv.slice(2));
 var validateOnly = args.has("--validate-config");
 var preflight = args.has("--preflight");
-var compiled = compileConfig(builtSyncConfig);
 function printConfigValidation() {
   const issues = validateBuiltSyncConfig(builtSyncConfig);
   for (const issue of issues) {
@@ -1455,13 +1484,14 @@ async function runPreflight() {
   }
   const { accountId } = await verifyJiraConnection(jira);
   log.info(`Jira auth OK (accountId ${accountId})`);
-  for (const issue of await validateJiraStringsAgainstProject(jira, builtSyncConfig)) {
+  const preflightIssues = await validateJiraStringsAgainstProject(jira, builtSyncConfig);
+  for (const issue of preflightIssues) {
     const fn = issue.level === "error" ? log.error : log.info;
     fn(`[jira preflight ${issue.level}] ${issue.message}`);
-    if (issue.level === "error") process.exit(1);
   }
+  if (preflightIssues.some((issue) => issue.level === "error")) process.exit(1);
   log.info("Jira status preflight OK");
-  log.info(`Deploy map: ${JSON.stringify(compiled.deployEnvToStatus)}`);
+  log.info(`Deploy map: ${JSON.stringify(builtSyncConfig.deploy.environmentToJiraStatus)}`);
 }
 function contextFromParsed(parsed, repository) {
   switch (parsed.kind) {
@@ -1519,7 +1549,8 @@ function contextFromParsed(parsed, repository) {
         event: "issue_comment",
         action: parsed.action,
         body: parsed.body,
-        pr: parsed.pr,
+        pullRequestNumber: parsed.pullRequestNumber,
+        pr: null,
         repository,
         url: parsed.commentUrl
       };
@@ -1547,6 +1578,7 @@ function contextFromParsed(parsed, repository) {
         headRef: parsed.headRef,
         headSha: parsed.headSha,
         baseRef: parsed.baseRef,
+        commitMessage: parsed.commitMessage,
         repository
       };
     case "deployment_status":
@@ -1577,17 +1609,21 @@ async function main() {
   const repository = process.env.GITHUB_REPOSITORY;
   if (!eventName || !eventPath) {
     log.info("Not running in GitHub Actions (missing event env); exit 0");
-    log.info("Local verify: pnpm verify:jira-sync");
-    log.info("Jira preflight: node .github/workflows/jira-sync/dist/verify.mjs --preflight");
+    log.info("Local checks: node dist/verify.mjs (from the jira-sync package folder)");
+    log.info("Jira preflight: node dist/verify.mjs --preflight (needs JIRA_* env)");
     return;
   }
+  const compiled = compileConfig(builtSyncConfig);
   const payload = JSON.parse(readFileSync(eventPath, "utf8"));
   const parsed = parseGitHubEvent(eventName, payload);
   if (!parsed) {
     log.info(`Unsupported event: ${eventName}`);
     return;
   }
-  if (!repository) return;
+  if (!repository) {
+    log.info("GITHUB_REPOSITORY not set; skipping");
+    return;
+  }
   const ctx = contextFromParsed(parsed, repository);
   if (!ctx) return;
   await runSyncForContext(compiled, ctx);

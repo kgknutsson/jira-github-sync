@@ -8,6 +8,7 @@
  */
 import type { JiraStepExtras } from './jiraStepExtras';
 import type { JiraStatusName, JiraTransitionName } from './jiraConfigLabels';
+import type { SyncOptions } from './syncOptions';
 
 export type { JiraStatusName, JiraTransitionName };
 export type { GithubLinkKind, JiraStepExtras } from './jiraStepExtras';
@@ -26,7 +27,6 @@ export type GitHubEventKind =
   | 'deployment_status';
 
 /** Maps deploy workflow jobs / branches to Jira deploy columns. */
-
 export type DeployMeta = {
   jobNameRegex: string;
   branchToEnvironment: Record<string, string>;
@@ -85,9 +85,9 @@ export type RuleConditions = {
   prState?: 'open' | 'closed' | readonly ('open' | 'closed')[];
   jiraStatusIs?: string;
   jiraStatusIsNot?: string;
-  /** pull_request.base.ref (target branch) */
+  /** PR base branch (pull_request, review, PR comment) or merge_group base branch */
   baseRef?: string | readonly string[];
-  /** pull_request.head.ref */
+  /** PR head branch, push branch, or merge_group head branch */
   headRef?: string | readonly string[];
   /** pull_request label name (any match) */
   label?: string | readonly string[];
@@ -114,8 +114,6 @@ export type SyncRule = {
   when: RuleConditions;
   then: RuleStep;
 };
-
-import type { SyncOptions } from './syncOptions';
 
 /** Output of `config(projectKey).…build()` in `settings.ts`. */
 export type BuiltSyncConfig = {

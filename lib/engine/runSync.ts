@@ -6,12 +6,12 @@
 import {
   findPullRequestsForCommit,
   getCommitMessage,
-  isSameRepositoryFork,
+  getPullRequest,
+  isFromSameRepository,
   readGitHubAuthFromEnv,
 } from '../adapters/github/api';
 import {
   getIssueStatusName,
-  JiraApiError,
   JiraIssueNotFoundError,
   readJiraConfigFromEnv,
 } from '../adapters/jira/client';
@@ -39,6 +39,7 @@ const TERMINAL_CONCLUSIONS = new Set([
   'neutral',
   'skipped',
   'stale',
+  'startup_failure',
 ]);
 
 function shouldProcessTerminalConclusion(
@@ -67,6 +68,17 @@ function shouldProcessWorkflowRun(ctx: WorkflowRunContext): boolean {
 
 function shouldProcessCheck(ctx: CheckSuiteContext | CheckRunContext): boolean {
   return shouldProcessTerminalConclusion(ctx.event, ctx.conclusion, ctx.action);
+}
+
+/** Fills `pr` on PR comments: the `issue_comment` payload only carries the PR number. */
+async function withPullRequest(ctx: SyncEventContext): Promise<SyncEventContext> {
+  if (ctx.event !== 'issue_comment' || ctx.pr || ctx.pullRequestNumber == null) return ctx;
+  const gh = readGitHubAuthFromEnv();
+  if (!gh) {
+    log.info('GITHUB_TOKEN not set; PR comment handled without PR details');
+    return ctx;
+  }
+  return { ...ctx, pr: await getPullRequest(gh, ctx.pullRequestNumber) };
 }
 
 function skipTextsForPullRequest(ctx: PullRequestContext | PullRequestReviewContext): string[] {
@@ -116,7 +128,7 @@ async function skipTextsForContext(ctx: SyncEventContext): Promise<string[]> {
     case 'release':
       return [ctx.tagName, ctx.releaseName];
     case 'merge_group':
-      return [ctx.headRef, ctx.baseRef];
+      return [ctx.commitMessage, ctx.headRef, ctx.baseRef];
     default:
       return [];
   }
@@ -126,7 +138,7 @@ async function resolveIssueKeys(
   compiled: CompiledSyncConfig,
   ctx: SyncEventContext
 ): Promise<string[]> {
-  const keyExtractor = createIssueKeyExtractor(compiled.projectKey, compiled.issueKeyPattern);
+  const keyExtractor = createIssueKeyExtractor(compiled.issueKeyPattern);
 
   if (
     ctx.event === 'workflow_run' ||
@@ -173,7 +185,7 @@ async function resolveIssueKeys(
   }
 
   if (ctx.event === 'merge_group') {
-    return keyExtractor.extractAll({ branch: ctx.headRef, title: ctx.headRef });
+    return keyExtractor.extractAll({ commitMessage: ctx.commitMessage, branch: ctx.headRef });
   }
 
   if (ctx.event === 'pull_request' || ctx.event === 'pull_request_review') {
@@ -223,16 +235,18 @@ async function syncOneIssue(
 /** Entry for one parsed webhook: may update zero or more Jira issues. */
 export async function runSyncForContext(
   compiled: CompiledSyncConfig,
-  ctx: SyncEventContext
+  eventCtx: SyncEventContext
 ): Promise<void> {
+  const ctx = await withPullRequest(eventCtx);
+
   if (ctx.event === 'pull_request' || ctx.event === 'pull_request_review') {
-    if (!isSameRepositoryFork(ctx.pr, ctx.repository)) {
+    if (!isFromSameRepository(ctx.pr, ctx.repository)) {
       log.info('Skipping fork pull request');
       return;
     }
   }
 
-  if (ctx.event === 'issue_comment' && ctx.pr && !isSameRepositoryFork(ctx.pr, ctx.repository)) {
+  if (ctx.event === 'issue_comment' && ctx.pr && !isFromSameRepository(ctx.pr, ctx.repository)) {
     log.info('Skipping fork pull request comment');
     return;
   }
@@ -247,11 +261,9 @@ export async function runSyncForContext(
 
   if (ctx.event === 'workflow_run' || ctx.event === 'check_suite' || ctx.event === 'check_run') {
     const gh = readGitHubAuthFromEnv();
-    const headSha =
-      ctx.event === 'workflow_run' ? ctx.headSha : ctx.headSha;
     if (gh) {
-      const prs = await findPullRequestsForCommit(gh, headSha);
-      if (prs.some((pr) => !isSameRepositoryFork(pr, gh.repository))) {
+      const prs = await findPullRequestsForCommit(gh, ctx.headSha);
+      if (prs.some((pr) => !isFromSameRepository(pr, gh.repository))) {
         log.info(`Skipping ${ctx.event} linked to a fork pull request`);
         return;
       }
@@ -285,8 +297,6 @@ export async function runSyncForContext(
     keysToProcess = [keysToProcess[0]!];
   }
 
-  const failOnJiraError = compiled.options.failOnJiraError;
-
   for (const issueKey of keysToProcess) {
     try {
       await syncOneIssue(compiled, ctx, jira, issueKey);
@@ -296,10 +306,7 @@ export async function runSyncForContext(
         continue;
       }
       log.error(`Jira sync failed for ${issueKey}`, err);
-      if (failOnJiraError) {
-        if (err instanceof JiraApiError) throw err;
-        throw err;
-      }
+      if (compiled.options.failOnJiraError) throw err;
     }
   }
 }

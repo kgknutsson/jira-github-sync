@@ -58,6 +58,9 @@ export type IssueCommentContext = {
   event: 'issue_comment';
   action: string;
   body: string;
+  /** PR number when the comment is on a pull request (`null` for plain issues). */
+  pullRequestNumber: number | null;
+  /** PR details, fetched by the engine for PR comments (the webhook payload has none). */
   pr: PullRequestRef | null;
   repository: string;
   url: string;
@@ -86,6 +89,8 @@ export type MergeGroupContext = {
   headRef: string;
   headSha: string;
   baseRef: string;
+  /** Head commit message of the merge group (carries the queued PR titles). */
+  commitMessage: string;
   repository: string;
 };
 

@@ -13,7 +13,7 @@
  *
  * @module config/jiraStepExtras
  *
- * @example PR transition + development panel link
+ * @example PR transition + remote link to the PR
  * ```ts
  * .transitionTo('In Review', {
  *   via: ['Start review'],
@@ -55,7 +55,7 @@ export type GithubLinkKind =
 
 /** Side-effect bundle on a rule step (`extras` on transition, comment, or deploy). */
 export type JiraStepExtras = {
-  /** Post a Jira remote link after the step succeeds. */
+  /** Add (or update) a Jira remote link after the step succeeds. */
   linkGithub?: GithubLinkKind;
   /** Field id → value (supports `{placeholder}` templates). */
   fields?: Record<string, string>;

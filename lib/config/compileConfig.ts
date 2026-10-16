@@ -16,7 +16,12 @@ export function compileConfig(built: BuiltSyncConfig, validate = true) {
   if (validate) assertValidConfig(built);
 
   const options = { ...DEFAULT_SYNC_OPTIONS, ...built.options };
-  const issueKeyPattern = new RegExp(String.raw`\b${built.projectKey}-\d+\b`, 'gi');
+  const projectKey = built.projectKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Not `\b`: keys must still match next to `_` (e.g. branch `PROJ-12_fix`).
+  const issueKeyPattern = new RegExp(
+    String.raw`(?<![A-Za-z0-9])${projectKey}-\d+(?![0-9])`,
+    'gi'
+  );
 
   return {
     built: { ...built, options },
