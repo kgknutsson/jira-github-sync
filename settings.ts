@@ -22,7 +22,6 @@
  * Jira/workflow/message values in this file are plain strings only.
  */
 import {
-  CheckEnd,
   config,
   If,
   Pr,
@@ -163,17 +162,6 @@ export const builtSyncConfig = config('PROJ')
   .if(If.RunEvent, RunTrigger.PullRequest)
   .if(If.Conclusion, RunEnd.Success)
   .comment('qualityGateSuccess')
-
-  .when(When.CheckSuite)
-  .named('Check suite failed (in review) → In Progress')
-  .if(If.CheckName, 'GitHub Actions')
-  .if(If.Conclusion, CheckEnd.Failure)
-  .ifJiraStatus('In Review')
-  .transitionTo('In Progress', {
-    via: ['Rework'],
-    onNoTransition: 'qualityGateFailedNoTransition',
-    commentAfterSuccess: 'qualityGateFailed',
-  })
 
   .when(When.Release)
   .named('Release published → comment')

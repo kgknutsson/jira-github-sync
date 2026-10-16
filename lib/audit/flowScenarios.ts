@@ -5,7 +5,7 @@
  *
  * @module audit/flowScenarios
  */
-import { CheckEnd, RunEnd, RunTrigger } from '../config/syncCatalog';
+import { RunEnd, RunTrigger } from '../config/syncCatalog';
 import { builtSyncConfig } from '../../settings';
 import { findMatchingRule } from '../engine/matchRule';
 import type { SyncEventContext } from '../engine/types';
@@ -223,21 +223,6 @@ export const JIRA_SYNC_FLOW_SCENARIOS: FlowScenario[] = [
     },
     jiraStatus: 'In Progress',
     expectRuleName: null,
-  },
-  {
-    id: 'check-suite-fail-in-review',
-    description: 'Check suite failed while In Review',
-    ctx: {
-      event: 'check_suite',
-      action: 'completed',
-      checkName: 'GitHub Actions',
-      conclusion: CheckEnd.Failure,
-      headSha: 'abc',
-      headBranch: 'feature/proj-1',
-      repository: repo,
-    },
-    jiraStatus: 'In Review',
-    expectRuleName: 'Check suite failed (in review) → In Progress',
   },
 ];
 

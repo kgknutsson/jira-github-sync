@@ -210,11 +210,7 @@ var builtSyncConfig = config("PROJ").options({
   via: ["Rework"],
   onNoTransition: "qualityGateFailedNoTransition",
   commentAfterSuccess: "qualityGateFailed"
-}).when("workflow_run" /* WorkflowRun */).named("Quality gate failed \u2192 comment only").if("workflow" /* Workflow */, "Quality Gate").if("runEvent" /* RunEvent */, "pull_request" /* PullRequest */).if("conclusion" /* Conclusion */, "failure" /* Failure */).unlessJiraStatus("In Review").comment("qualityGateFailed").when("workflow_run" /* WorkflowRun */).named("Quality gate success \u2192 comment").if("workflow" /* Workflow */, "Quality Gate").if("runEvent" /* RunEvent */, "pull_request" /* PullRequest */).if("conclusion" /* Conclusion */, "success" /* Success */).comment("qualityGateSuccess").when("check_suite" /* CheckSuite */).named("Check suite failed (in review) \u2192 In Progress").if("checkName" /* CheckName */, "GitHub Actions").if("conclusion" /* Conclusion */, "failure" /* Failure */).ifJiraStatus("In Review").transitionTo("In Progress", {
-  via: ["Rework"],
-  onNoTransition: "qualityGateFailedNoTransition",
-  commentAfterSuccess: "qualityGateFailed"
-}).when("release" /* Release */).named("Release published \u2192 comment").if("action" /* Action */, "published" /* Published */).comment("releasePublished", { extras: { linkGithub: "release" } }).build();
+}).when("workflow_run" /* WorkflowRun */).named("Quality gate failed \u2192 comment only").if("workflow" /* Workflow */, "Quality Gate").if("runEvent" /* RunEvent */, "pull_request" /* PullRequest */).if("conclusion" /* Conclusion */, "failure" /* Failure */).unlessJiraStatus("In Review").comment("qualityGateFailed").when("workflow_run" /* WorkflowRun */).named("Quality gate success \u2192 comment").if("workflow" /* Workflow */, "Quality Gate").if("runEvent" /* RunEvent */, "pull_request" /* PullRequest */).if("conclusion" /* Conclusion */, "success" /* Success */).comment("qualityGateSuccess").when("release" /* Release */).named("Release published \u2192 comment").if("action" /* Action */, "published" /* Published */).comment("releasePublished", { extras: { linkGithub: "release" } }).build();
 
 // lib/config/validateConfig.ts
 function collectMessageKeysFromStep(step) {
@@ -628,21 +624,6 @@ var JIRA_SYNC_FLOW_SCENARIOS = [
     },
     jiraStatus: "In Progress",
     expectRuleName: null
-  },
-  {
-    id: "check-suite-fail-in-review",
-    description: "Check suite failed while In Review",
-    ctx: {
-      event: "check_suite",
-      action: "completed",
-      checkName: "GitHub Actions",
-      conclusion: "failure" /* Failure */,
-      headSha: "abc",
-      headBranch: "feature/proj-1",
-      repository: repo
-    },
-    jiraStatus: "In Review",
-    expectRuleName: "Check suite failed (in review) \u2192 In Progress"
   }
 ];
 function evaluateFlowScenario(scenario) {
