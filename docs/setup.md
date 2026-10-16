@@ -39,7 +39,7 @@ Copy [templates/jira-sync.config.yml](../templates/jira-sync.config.yml) to `.gi
 Locally (Node 20+):
 
 ```bash
-npx -y github:kgknutsson/jira-github-sync#v1 validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
 
 With `JIRA_BASE_URL`, `JIRA_USER_EMAIL` and `JIRA_API_TOKEN` in your environment, add `--preflight` to also check the bot's login and that every status in your rules exists in the Jira project. In CI, the same check runs with `validate-only: true`.

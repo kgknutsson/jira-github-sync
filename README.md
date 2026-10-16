@@ -70,7 +70,7 @@ rules:
 Check everything locally before pushing:
 
 ```bash
-npx -y github:kgknutsson/jira-github-sync#v1 validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
 
 ## Docs

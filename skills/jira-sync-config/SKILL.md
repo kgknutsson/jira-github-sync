@@ -77,7 +77,7 @@ Start from [templates/jira-sync.workflow.yml](https://github.com/kgknutsson/jira
 ### 5. Validate
 
 ```bash
-npx -y github:kgknutsson/jira-github-sync#v1 validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
 
 Add `--preflight` (with `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN` set) to confirm every status exists in Jira. Fix all errors and warnings.

@@ -8,7 +8,7 @@ First release as a GitHub Action: `uses: kgknutsson/jira-github-sync@v1` with ru
 
 - YAML rules file with a generated JSON Schema for editor autocomplete and validation.
 - Validation with line-numbered annotations, plus warnings when the workflow's triggers, activity types, workflow names, fork guard or permissions do not match the rules.
-- `validate-only` input and a local `validate` command (`npx github:kgknutsson/jira-github-sync#v1 validate`), optionally checking Jira status names.
+- `validate-only` input and a local `validate` command (`npx https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.tar.gz validate`), optionally checking Jira status names.
 - Merge-queue issue keys from the head commit message; `startup_failure` conclusions.
 
 ### Fixed
