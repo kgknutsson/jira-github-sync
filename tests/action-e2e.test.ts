@@ -1,11 +1,11 @@
 import { execFile, execSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 
 /** End-to-end runs of the bundled action (dist/index.mjs) against a fake Jira server. */
 const ROOT = process.cwd();
@@ -80,6 +80,8 @@ async function runAction(env: Record<string, string>, payload: unknown = {}) {
   } catch (err) {
     const failed = err as { code?: number; stdout?: string; stderr?: string };
     return { code: failed.code ?? 1, output: `${failed.stdout ?? ''}${failed.stderr ?? ''}` };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -197,6 +199,7 @@ describe('action (dist/index.mjs)', () => {
 
   it('fails with a line annotation for an invalid rules file', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'jira-sync-workspace-'));
+    onTestFinished(() => rmSync(workspace, { recursive: true, force: true }));
     mkdirSync(join(workspace, '.github'));
     writeFileSync(
       join(workspace, '.github', 'jira-sync.config.yml'),
