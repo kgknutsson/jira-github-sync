@@ -59,7 +59,7 @@ Document the plan briefly; then edit **only** `settings.ts` unless engine gaps r
 
 ### 3. Edit `settings.ts` correctly
 
-**Imports:** enums from `./lib/config` — `config`, `When`, `If`, `PrAct`, `RunEnd`, `CheckEnd`, `ReleaseAct`, `Review`, `ReviewAct`, `RunTrigger`, `Pr`.
+**Imports:** enums from `./lib/config` — `config`, `When`, `If`, `PrAct`, `RunEnd`, `CheckEnd`, `ReleaseAct`, `Review`, `ReviewAct`, `RunTrigger`, `Pr`, `DeployState`.
 
 **Strings stay inline** — Jira statuses, transition names, workflow titles, message bodies.
 
@@ -96,10 +96,13 @@ File: `.github/workflows/jira-sync.yml` (sibling of the `jira-sync/` folder).
 | New rule uses | YAML must include |
 | ------------- | ----------------- |
 | `PrAct.*` in `.if(If.Action, …)` | same values under `on.pull_request.types` |
+| `ReviewAct.*` in `.if(If.Action, …)` | same values under `on.pull_request_review.types` |
 | `.if(If.Workflow, 'Name')` | `'Name'` in `on.workflow_run.workflows` |
 | `When.CheckSuite` | `check_suite.types: [completed]`, permission `checks: read` |
-| `When.Release` | `release.types: [published]` |
+| `When.Release` | `release.types` with every `ReleaseAct` used (e.g. `published`) |
 | `When.CheckRun` | `check_run.types: [completed]` |
+
+`check_suite` / `check_run` only fire for **third-party** CI apps — GitHub never triggers workflows for checks created by GitHub Actions. For Actions CI use `When.WorkflowRun`.
 
 Keep entrypoint: `node .github/workflows/jira-sync/dist/run.mjs`.
 
@@ -111,6 +114,8 @@ From jira-sync directory:
 node build.mjs
 node dist/verify.mjs
 ```
+
+Do not use `npm run qa` in a host repo after customizing `settings.ts`: its unit tests assert this package's sample rules.
 
 Optional Jira API check:
 
@@ -145,9 +150,10 @@ Default: **settings + YAML only**.
 | Broad merge rule before `main` → Done | Reorder rules |
 | Missing message key | Add to `.messages({ … })` |
 | Workflow name typo | Match deploy/QG YAML `name:` exactly |
-| Forgot `workflow_run` on default branch | Document: listener must be on `main` |
+| Forgot `workflow_run` on default branch | Document: listener must be on the default branch |
 | Edit TS without rebuilding dist | Run `node build.mjs`, commit dist |
 | `tsx run.ts` in Actions | Use bundled `dist/run.mjs` only |
+| `When.CheckSuite` + `'GitHub Actions'` | Never fires — use `When.WorkflowRun` + workflow `name:` |
 
 ---
 

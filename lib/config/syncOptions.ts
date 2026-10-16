@@ -3,7 +3,8 @@
  *
  * **GitHub source:** N/A — repo policy in `settings.ts` via `.options({ … })`.
  *
- * **Use with:** First chain call on `config('PROJECT')` before `.messages()` / rules.
+ * **Use with:** Usually the first chain call after `config('PROJECT')` (any position before
+ * `.build()` works).
  *
  * @module config/syncOptions
  *

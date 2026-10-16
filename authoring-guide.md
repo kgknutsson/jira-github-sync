@@ -4,7 +4,7 @@ How to write and extend automation in **`settings.ts`**. For secrets, Jira workf
 
 **AI agents:** use skill **`jira-sync-config`** ([skills/jira-sync-config/SKILL.md](skills/jira-sync-config/SKILL.md)).
 
-**Live reference:** [`settings.ts`](settings.ts) (this repo’s 14 rules).
+**Live reference:** [`settings.ts`](settings.ts) (this repo’s 13 sample rules).
 
 ---
 
@@ -46,7 +46,7 @@ export const builtSyncConfig = config('YOUR-PROJECT-KEY')
   .build();
 ```
 
-Rebuild after TypeScript edits: **`node build.mjs`**, then **`npm run qa`** (or `node dist/verify.mjs`).
+Rebuild after TypeScript edits: **`node build.mjs`**, then **`node dist/verify.mjs`** (in this repository: `npm run qa`).
 
 ---
 
@@ -82,16 +82,19 @@ Reference `.comment('merged')` or `commentAfterSuccess: 'deploySuccess'` by id.
 
 | Placeholder | Typical events |
 | ----------- | -------------- |
-| `{url}` | PR URL, workflow run URL, release URL |
-| `{prUrl}` | Same as `{url}` on PR events |
+| `{url}` | PR URL, workflow run URL, release URL, comment URL; commit (checks) page for check, push, and merge group events |
+| `{prUrl}` | PR URL on PR, review, and PR comment events |
 | `{baseRef}` / `{headRef}` | Target / source branch |
 | `{issueKey}` | e.g. `PROJ-123` |
-| `{currentStatus}` / `{targetStatus}` | Jira columns (transitions / no-transition comments) |
-| `{env}` | Deploy environment (`dev`, `test`, `prod`) |
-| `{workflowName}` | `workflow_run.name` |
-| `{conclusion}` | Run/check conclusion |
+| `{currentStatus}` | Jira column when the rule matched |
+| `{targetStatus}` / `{status}` | Target column (transition / deploy steps; `{status}` on comment rules is the current column) |
+| `{env}` | Deploy environment (`dev`, `test`, `prod`) or GitHub Environment on `deployment_status` |
+| `{workflowName}` / `{runEvent}` | `workflow_run.name` / `workflow_run.event` |
+| `{conclusion}` / `{checkName}` | Run/check conclusion, check name |
 | `{releaseTag}` / `{releaseName}` | Release events |
-| `{author}` / `{labels}` | PR author login, comma-separated labels |
+| `{author}` / `{labels}` | PR author login, comma-separated labels (PR / review events) |
+
+Every step kind (comment, transition, deploy) gets the same event placeholders; unknown placeholders are left as written.
 
 ```ts
 .messages({
@@ -113,7 +116,7 @@ Required when any rule uses **`.deployToJiraStatus()`**. Maps deploy workflow jo
 | Field | Meaning |
 | ----- | ------- |
 | `jobNameRegex` | Regex matching deploy job names (capture group = env slug) |
-| `branchToEnvironment` | Fallback: branch name → env when jobs API is unavailable |
+| `branchToEnvironment` | Fallback for **push-triggered** deploy runs when no job name matches `jobNameRegex` |
 | `environmentToJiraStatus` | Env slug → **exact Jira status name** |
 
 ```ts
@@ -214,7 +217,7 @@ Each block is a **copy-paste starting point**. Adjust Jira/workflow strings for 
 
 ### `When.PullRequest`
 
-**YAML:** add matching `types` under `on.pull_request.types` in [`jira-sync.yml`](../jira-sync.yml).
+**YAML:** add matching `types` under `on.pull_request.types` in your `.github/workflows/jira-sync.yml` (start from [templates/jira-sync.workflow.yml](templates/jira-sync.workflow.yml)).
 
 ```ts
 // Ready for review → In Review (skip label + non-draft)
@@ -337,10 +340,12 @@ Each block is a **copy-paste starting point**. Adjust Jira/workflow strings for 
 
 **YAML:** `on.check_suite.types: [completed]` (and/or `check_run`); workflow needs **`checks: read`**.
 
+> **GitHub limitation:** these events never trigger workflows for check suites/runs created by **GitHub Actions** (or for head SHAs associated with Actions), so they only see **third-party** CI apps. For Actions-based CI, use `When.WorkflowRun` with the workflow `name:` instead.
+
 ```ts
 .when(When.CheckSuite)
-.named('Check suite failed (in review) → In Progress')
-.if(If.CheckName, 'GitHub Actions')
+.named('External CI failed (in review) → In Progress')
+.if(If.CheckName, 'CircleCI Checks')
 .if(If.Conclusion, CheckEnd.Failure)
 .ifJiraStatus('In Review')
 .transitionTo('In Progress', {
@@ -377,12 +382,14 @@ Optional: `.if(If.ReleaseTag, 'v1.0.0', 'v2.0.0')` to filter tags.
 .when(When.IssueComment)
 .named('Bot command in comment')
 .if(If.Action, 'created')
-// When the payload includes a PR, you can filter branches/labels:
+// On PR comments you can filter branches/labels (never matches plain issue comments):
 // .if(If.BaseRef, 'main')
 .comment('myTemplate')
 ```
 
-Issue keys are parsed from the comment body (and from PR title/body when GitHub sends PR context).
+Issue keys are parsed from the comment body, plus the PR title, body, and branch on PR comments. GitHub's `issue_comment` payload has no PR details, so the engine fetches the PR (needs `GITHUB_TOKEN` and `pull-requests: read`); comments on fork PRs are skipped.
+
+> **Public repositories:** anyone can comment, so any `IssueComment` rule can be triggered by outsiders for any issue key they type. Prefer comment-only rules there, or keep `issue_comment` out of the workflow triggers.
 
 ---
 
@@ -428,15 +435,18 @@ Import `DeployState` from `./lib/config`.
 .comment('mergeQueueNote')
 ```
 
+Branch filters use names without `refs/heads/`. Keys come from the merge group's head commit message (which carries the queued PR titles).
+
 ---
 
 ## Issue keys and opt-out
 
 | Mechanism | How |
 | --------- | --- |
-| **Key format** | `{PROJECT_KEY}-\d+` (e.g. `PROJ-123`) in PR title, body, branch, and/or commit message |
+| **Key format** | `{PROJECT_KEY}-\d+` (e.g. `PROJ-123`, case-insensitive, separated by any non-alphanumeric character such as `/`, `-`, `_`) in PR title, body, branch, and/or commit message |
 | **Resolution order (PR)** | title → body → branch |
 | **Resolution order (workflow run)** | linked PR → commit message → branch |
+| **Resolution order (merge group)** | head commit message → head ref |
 | **Text skip** | `skipMarker` in title/body/branch/commit |
 | **Label skip** | `.if(If.NotLabel, 'skip-jira')` on PR rules |
 | **Fork PRs** | Skipped (no cross-repo transitions) |
@@ -452,26 +462,23 @@ When you add rules:
 3. **New `When.*`** — add the corresponding `on:` trigger (see [templates/jira-sync.workflow.yml](templates/jira-sync.workflow.yml) for a broad starter set).
 4. **Permissions** — `pull-requests: read`, `checks: read` for PR/commit and check events.
 
-Static audits in `lib/audit/syncAudit.ts` (via `npm run qa` / `dist/verify.mjs`) catch many drifts automatically.
+Static audits in `lib/audit/syncAudit.ts` (via `dist/verify.mjs`) catch many drifts automatically.
 
 ---
 
 ## Verify loop
 
-```bash
-npm run qa
-
-# Optional live Jira + status name check
-node dist/verify.mjs --preflight
-```
-
-Requires `JIRA_*` env for `--preflight`.
-
-After changing **`lib/`** engine code or **`settings.ts`**, rebuild and commit **`dist/`**:
+After changing **`lib/`** engine code or **`settings.ts`**, rebuild and commit **`dist/`**, then verify:
 
 ```bash
 node build.mjs
+node dist/verify.mjs              # settings.ts vs jira-sync.yml (works from any directory)
+
+# Optional live Jira + status name check (needs JIRA_* env)
+node dist/verify.mjs --preflight
 ```
+
+In this repository, `npm run qa` runs the same checks plus type-checking and the unit tests, which assert the bundled sample rules.
 
 ---
 
@@ -482,8 +489,12 @@ node build.mjs
 | `Action` | PullRequest, PullRequestReview, CheckSuite, CheckRun, IssueComment, Release, MergeGroup, DeploymentStatus |
 | `ReviewState` | PullRequestReview |
 | `Workflow`, `RunEvent`, `Conclusion` | WorkflowRun |
-| `PrState`, `Merged`, `Draft` | PullRequest, PullRequestReview |
-| `BaseRef`, `HeadRef`, `Label`, `NotLabel`, `Author` | PullRequest, PullRequestReview, IssueComment (when PR present) |
+| `PrState` | PullRequest, PullRequestReview |
+| `Merged`, `Draft` | PullRequest |
+| `BaseRef` | PullRequest, PullRequestReview, IssueComment (PR comments), MergeGroup |
+| `HeadRef` | PullRequest, PullRequestReview, IssueComment (PR comments), MergeGroup, Push |
+| `Label`, `NotLabel` | PullRequest, PullRequestReview, IssueComment (PR comments) |
+| `Author` | PullRequest, PullRequestReview |
 | `CheckName`, `Conclusion` | CheckSuite, CheckRun |
 | `DeploymentEnvironment`, `DeploymentState` | DeploymentStatus |
 | `ReleaseTag` | Release |
@@ -499,6 +510,6 @@ Only when GitHub sends a value the engine does not yet expose:
 1. Add to the appropriate enum in **`syncCatalog.ts`** (with JSDoc + wire value).
 2. If needed, extend parsing in **`lib/adapters/github/parseEvent.ts`** and matching in **`lib/engine/matchRule.ts`**.
 3. Add DSL overloads in **`lib/config/dsl.ts`** if TypeScript should type-check new `.if()` combinations.
-4. Rebuild **`dist/`**, extend tests under **`tests/unit/github/`**.
+4. Rebuild **`dist/`**, extend tests under **`tests/`**.
 
 For most repos, editing **`settings.ts`** and workflow YAML is enough.

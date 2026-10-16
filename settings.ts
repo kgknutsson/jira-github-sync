@@ -16,6 +16,7 @@
  * **How to write rules:** [authoring-guide.md](./authoring-guide.md)
  *
  * @module settings
+ */
 
 /**
  * GitHub enums — hover `When`, `If`, `PrAct`, `RunEnd`, … for unified docs + `@example` rule fragments.

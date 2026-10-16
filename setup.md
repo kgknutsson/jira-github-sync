@@ -18,7 +18,6 @@ Behavior depends on **`settings.ts`**. The sample config includes:
 | PR merged to **main** | **Done** (+ comment) |
 | PR merged (other bases) | Comment only |
 | **Quality Gate** on a PR | Comment; failure may move **In Review** → **In Progress** |
-| **Check suite** failed (while **In Review**) | Same **In Progress** path as QG failure |
 | **Release** published | Comment with tag + link |
 | Named deploy workflow success | **Deployed (Dev)** / **Deployed (Test)** / **Done** (by env) |
 | Deploy failed | Comment with run URL |
@@ -32,7 +31,7 @@ No Jira board webhook — only GitHub Actions + Jira REST API.
 ### 1. Code on GitHub
 
 - [ ] Consumer workflow **[templates/jira-sync.workflow.yml](templates/jira-sync.workflow.yml)** copied to **`.github/workflows/jira-sync.yml`** (adjust `run:` path and triggers).
-- [ ] Package vendored (include committed **`dist/`**).
+- [ ] Package vendored under `.github/workflows/jira-sync/` (include committed **`dist/`**). Git submodule: set `submodules: true` on `actions/checkout`.
 - [ ] Listener workflow merged to your **default branch** if you use `workflow_run` (deploy / CI).
 
 ### 2. GitHub secrets
@@ -47,7 +46,7 @@ Add on **your repository** (or org secrets visible to it):
 
 - [ ] All three secrets set (names must match exactly).
 - [ ] Bot user can browse your Jira project and **transition** issues.
-- [ ] `GITHUB_TOKEN` is automatic — no secret needed.
+- [ ] `GITHUB_TOKEN` is provided by Actions — no secret to create, but keep the `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` line in the sync step (used for PR / commit issue-key lookup).
 
 **If secrets are missing:** the job runs but logs `Jira secrets not configured; skipping`.
 
@@ -58,7 +57,7 @@ Status and transition **strings in `settings.ts` must match Jira exactly** (case
 - [ ] Required statuses and transitions exist for your rules.
 - [ ] Issue keys in GitHub use your project key (e.g. `PROJ-123`).
 
-After TS changes: `node build.mjs` in the package folder and commit **`dist/`**.
+After TS changes: `node build.mjs` in the package folder, commit **`dist/`**, and run `node dist/verify.mjs`.
 
 ### 4. Bot user (recommended)
 
@@ -72,14 +71,14 @@ After TS changes: `node build.mjs` in the package folder and commit **`dist/`**.
 - [ ] PR with **`YOUR-KEY-*`** in title or branch → **Actions** → **Jira Sync** succeeds.
 - [ ] Matching issue moves or gets a comment in Jira.
 
-**Optional (local, with `JIRA_*` in env)**
+**Optional (local, in the package folder; `--preflight` needs `JIRA_*` in env)**
 
 ```bash
-npm run qa
+node dist/verify.mjs
 node dist/verify.mjs --preflight
 ```
 
-- [ ] Preflight prints `Jira preflight OK`.
+- [ ] Verify prints `Jira sync verify OK`; preflight prints `Jira preflight OK`.
 
 ---
 
@@ -104,6 +103,8 @@ Job name pattern in sample: `Build and Deploy (dev|test|prod)`.
 | Job green, nothing in Jira | Secrets missing; no issue key in PR/branch/commit; or `[skip-jira]` in text |
 | “No transition” comment | No workflow path to target status — adjust Jira or `settings.ts` |
 | Deploy did not update Jira | Listener on default branch? Issue key on commit/branch? |
+| PR event did nothing | Action missing from `pull_request.types` in `jira-sync.yml`? (`node dist/verify.mjs` reports it) |
+| `check_suite` / `check_run` rule never runs | GitHub does not trigger workflows for checks created by GitHub Actions — use `workflow_run` |
 | Fork PR | Sync skipped by design |
 | 401 / preflight fails | Wrong email or token |
 

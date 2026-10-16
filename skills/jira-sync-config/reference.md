@@ -1,13 +1,13 @@
 # jira-sync config — agent reference
 
-Paths are relative to the **jira-sync package root** (this folder’s parent: `.github/workflows/jira-sync/`).
+Paths are relative to the **jira-sync package root** (two levels above this file; vendored at `.github/workflows/jira-sync/`).
 
 | File | Role |
 | ---- | ---- |
 | [settings.ts](../../settings.ts) | **Edit this** — rules, Jira strings, workflow names, messages |
 | [authoring-guide.md](../../authoring-guide.md) | Human + agent examples for every `When` |
 | [lib/config/syncCatalog.ts](../../lib/config/syncCatalog.ts) | GitHub enums only (`When`, `If`, `PrAct`, …) |
-| [../jira-sync.yml](../../../jira-sync.yml) | Webhook triggers and permissions |
+| Host repo `.github/workflows/jira-sync.yml` (template: [templates/jira-sync.workflow.yml](../../templates/jira-sync.workflow.yml)) | Webhook triggers and permissions |
 | [dist/run.mjs](../../dist/run.mjs) | Actions entry (rebuild after TS changes) |
 
 ## Hard boundaries
@@ -47,9 +47,12 @@ config('PROJ')
 | `If` | Typical `When` |
 | ---- | -------------- |
 | `Action` + `PrAct` / `ReviewAct` / `ReleaseAct` | PullRequest, PullRequestReview, Release, … |
-| `PrState`, `Merged`, `Draft`, `BaseRef`, `HeadRef`, `Label`, `NotLabel`, `Author` | PullRequest, PullRequestReview |
+| `PrState`, `BaseRef`, `HeadRef`, `Label`, `NotLabel`, `Author` | PullRequest, PullRequestReview |
+| `Merged`, `Draft` | PullRequest |
+| `BaseRef`, `HeadRef`, `Label`, `NotLabel` | IssueComment (PR comments only) |
+| `BaseRef`, `HeadRef` | MergeGroup (`HeadRef` also Push) |
 | `Workflow`, `RunEvent`, `Conclusion` + `RunEnd` | WorkflowRun |
-| `CheckName`, `Conclusion` + `CheckEnd` | CheckSuite, CheckRun |
+| `CheckName`, `Conclusion` + `CheckEnd` | CheckSuite, CheckRun (third-party CI only) |
 | `DeploymentEnvironment`, `DeploymentState` | DeploymentStatus |
 | `ReleaseTag` | Release |
 
@@ -62,14 +65,14 @@ After editing `settings.ts`:
 - [ ] `check_suite` rules → `on.check_suite.types` includes `completed` + `checks: read`
 - [ ] `release` rules → `on.release.types` includes `published`
 - [ ] `pull_request_review` → `types` includes `submitted` if used
-- [ ] Runner: `node .github/workflows/jira-sync/dist/run.mjs` (no repo-root `pnpm install`)
+- [ ] Runner: `node .github/workflows/jira-sync/dist/run.mjs` (bundled; no dependency install step in the workflow)
 
 ## Verify (host repo)
 
 | Host | Command |
 | ---- | ------- |
-| **This repository** | `npm run qa` (build + unit tests + verify) |
-| **Vendored in another repo** | `node build.mjs` then `node dist/verify.mjs` from the package directory |
+| **This repository** | `npm run qa` (build + typecheck + unit tests + verify) |
+| **Vendored in another repo** | `node build.mjs` then `node dist/verify.mjs` (works from any directory) |
 | **Jira live** | `node dist/verify.mjs --preflight` with `JIRA_*` env |
 
 Commit **`dist/*.mjs`** after TypeScript changes under jira-sync.
@@ -78,7 +81,7 @@ Commit **`dist/*.mjs`** after TypeScript changes under jira-sync.
 
 Every `comment('id')`, `onNoTransition`, `commentAfterSuccess`, `commentWhenSkipped` must exist in `.messages({ … })`.
 
-Common placeholders: `{url}`, `{prUrl}`, `{baseRef}`, `{headRef}`, `{issueKey}`, `{currentStatus}`, `{targetStatus}`, `{env}`, `{workflowName}`, `{releaseTag}`.
+Common placeholders: `{url}`, `{prUrl}`, `{baseRef}`, `{headRef}`, `{issueKey}`, `{currentStatus}`, `{targetStatus}`, `{status}`, `{env}`, `{workflowName}`, `{releaseTag}`.
 
 ## Side effects
 

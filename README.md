@@ -1,19 +1,16 @@
 # jira-github-sync
 
-Portable **GitHub Actions ↔ Jira** sync engine. Rules live in TypeScript (`settings.ts`); Actions runs a **bundled** `dist/run.mjs` (no app `pnpm install` required).
+Portable **GitHub Actions ↔ Jira** sync engine. Rules live in TypeScript (`settings.ts`); Actions runs a **bundled** `dist/run.mjs` (no `npm install` needed in your app).
 
 **Repository:** https://github.com/kgknutsson/jira-github-sync
 
 ## Use in your app
 
-1. **Vendor** this repo (copy folder or submodule):
-   - Common path: `.github/workflows/jira-sync/` (or repo root if you submodule the whole project).
-2. Copy **[templates/jira-sync.workflow.yml](templates/jira-sync.workflow.yml)** → your repo **`.github/workflows/jira-sync.yml`** and fix the `run:` line:
-   - Vendored: `node .github/workflows/jira-sync/dist/run.mjs`
-   - Submodule at repo root: `node dist/run.mjs`
+1. **Vendor** this repo under **`.github/workflows/jira-sync/`** (copy the folder, or add it as a git submodule and set `submodules: true` on `actions/checkout`).
+2. Copy **[templates/jira-sync.workflow.yml](templates/jira-sync.workflow.yml)** → your repo **`.github/workflows/jira-sync.yml`** (it already runs `node .github/workflows/jira-sync/dist/run.mjs`) and adjust triggers to your rules.
 3. Edit **`settings.ts`** — project key, Jira status/transition strings, workflow names, rules.
 4. Add GitHub secrets: `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`.
-5. Rebuild after TS edits: `node build.mjs` and commit **`dist/`**.
+5. In the package folder: `npm ci`, `node build.mjs`, commit **`dist/`**, then `node dist/verify.mjs` to check `settings.ts` against your workflow.
 
 | Doc | Purpose |
 | --- | ------- |
@@ -25,11 +22,11 @@ Portable **GitHub Actions ↔ Jira** sync engine. Rules live in TypeScript (`set
 
 ```bash
 npm ci
-npm run qa          # build + vitest (tests/) + dist/verify.mjs
+npm run qa          # build + typecheck + vitest (tests/) + dist/verify.mjs
 node dist/verify.mjs --preflight   # optional; needs JIRA_* env
 ```
 
-All unit tests live under **`tests/`** in this repository only.
+All unit tests live under **`tests/`** and exercise the bundled sample `settings.ts`. After you customize `settings.ts` in your app, use `node dist/verify.mjs` (portable checks) rather than `npm run qa`.
 
 ## Layout
 
@@ -37,9 +34,11 @@ All unit tests live under **`tests/`** in this repository only.
 jira-github-sync/
   settings.ts          ← your rules (sample config included)
   dist/run.mjs         ← Actions entry (committed)
+  dist/verify.mjs      ← local checks: settings + workflow YAML (committed)
   lib/                 ← engine
   templates/           ← consumer workflow YAML
   skills/              ← agent skills (copy with package)
+  tests/               ← unit tests for the engine and sample config
 ```
 
 ## License
