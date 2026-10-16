@@ -5,7 +5,8 @@
 # `types`, and every workflow name under workflow_run.workflows. The action warns in the job log
 # when they drift.
 #
-# Secrets: JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN
+# Secrets: JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN, as repository, organization or
+# environment secrets. For environment secrets, uncomment `environment:` on the job.
 name: Jira Sync
 
 on:
@@ -36,6 +37,9 @@ jobs:
     name: Jira Sync
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # environment:
+    #   name: jira-sync
+    #   deployment: false
     # Reviews have no branch filter, so match the pull_request branches here; skip workflow runs
     # that came from forks (they would run with your secrets).
     if: >-

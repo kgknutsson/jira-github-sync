@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 
-import { readJiraConfigFromEnv, verifyJiraConnection } from './lib/adapters/jira/client';
+import { missingJiraCredentials, readJiraConfigFromEnv, verifyJiraConnection } from './lib/adapters/jira/client';
 import { validateJiraStringsAgainstProject } from './lib/adapters/jira/preflightConfig';
 import { auditRules, auditWorkflow } from './lib/audit/workflowAudit';
 import { compileConfig } from './lib/config/compileConfig';
@@ -76,7 +76,7 @@ function loadAndCheck(rules: FileRef, workflow?: FileRef & { jobId?: string }): 
 async function checkJira(config: BuiltSyncConfig): Promise<boolean> {
   const jira = readJiraConfigFromEnv();
   if (!jira) {
-    log.info('Jira credentials not set; skipping the Jira status check');
+    log.annotate('warning', `Jira status check skipped: credentials missing (${missingJiraCredentials().join(', ')})`);
     return true;
   }
   const { accountId } = await verifyJiraConnection(jira);

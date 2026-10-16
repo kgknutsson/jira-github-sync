@@ -10,15 +10,25 @@ Adding jira-github-sync to a repository takes a Jira bot account, three secrets,
 
 ## 2. GitHub secrets
 
-Add these on the repository, or as organization secrets shared with it:
+Add these as repository secrets, organization secrets shared with the repository, or environment secrets:
 
 | Secret | Value |
 | ------ | ----- |
-| `JIRA_BASE_URL` | `https://your-site.atlassian.net` (no trailing slash) |
+| `JIRA_BASE_URL` | `https://your-site.atlassian.net` |
 | `JIRA_USER_EMAIL` | The bot account's email |
 | `JIRA_API_TOKEN` | The bot account's API token |
 
-The action also uses the workflow's own `GITHUB_TOKEN` (no secret needed) to find the PR behind a commit or comment and to read deploy job names. When the Jira secrets are missing, for example on Dependabot or fork PRs, the action validates the rules and skips.
+Environment secrets keep the Jira token out of every other workflow in the repository, but a job only receives them when it names the environment. Add this to the job in the workflow file; `deployment: false` stops each run from appearing as a deployment on your PRs:
+
+```yaml
+    environment:
+      name: jira-sync
+      deployment: false
+```
+
+Don't give that environment required reviewers, a wait timer or branch restrictions: they apply to every Jira Sync run.
+
+The action also uses the workflow's own `GITHUB_TOKEN` (no secret needed) to find the PR behind a commit or comment and to read deploy job names. When the Jira secrets don't reach the job, the action still validates the rules, then warns about each issue it could not update. Dependabot PRs, for example, get no Actions secrets.
 
 ## 3. Workflow file
 
@@ -63,7 +73,7 @@ updates:
 
 | Symptom | Check |
 | ------- | ----- |
-| Job green, nothing in Jira | Log says `Jira secrets not configured` → secrets missing; `No PROJ issue key` → no key in PR title/body/branch or commit; `Skip marker` → `[skip-jira]` in the text |
+| Job green, nothing in Jira | `Jira credentials missing` warning → the secrets don't reach the job (environment secrets need `environment:` on the job); `No PROJ issue key` → no key in PR title/body/branch or commit; `Skip marker` → `[skip-jira]` in the text |
 | `No rule matched` | The event or its `action` matches no rule; rules run top to bottom, first match wins |
 | A PR event did nothing at all | The action is missing from `on.pull_request.types`; the job log warns about it |
 | No-transition comment on the issue | Jira has no transition from the current status to the target; adjust the Jira workflow or the rule |

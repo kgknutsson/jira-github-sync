@@ -37,13 +37,23 @@ export class JiraApiError extends Error {
   }
 }
 
+const CREDENTIAL_VARS = ['JIRA_BASE_URL', 'JIRA_USER_EMAIL', 'JIRA_API_TOKEN'] as const;
+
+/** Credential variables that are unset or blank, e.g. because a secret does not reach the job. */
+export function missingJiraCredentials(): string[] {
+  return CREDENTIAL_VARS.filter((name) => !process.env[name]?.trim());
+}
+
 /** Reads Jira credentials from environment; returns `null` if any secret is missing. */
 export function readJiraConfigFromEnv(): JiraConfig | null {
-  const baseUrl = process.env.JIRA_BASE_URL?.replace(/\/$/, '');
-  const email = process.env.JIRA_USER_EMAIL;
-  const apiToken = process.env.JIRA_API_TOKEN;
-  if (!baseUrl || !email || !apiToken) return null;
-  return { baseUrl, email, apiToken };
+  if (missingJiraCredentials().length > 0) return null;
+  // Pasted secrets often end in a newline, which Jira rejects with 401.
+  const value = (name: (typeof CREDENTIAL_VARS)[number]) => (process.env[name] ?? '').trim();
+  return {
+    baseUrl: value('JIRA_BASE_URL').replace(/\/+$/, ''),
+    email: value('JIRA_USER_EMAIL'),
+    apiToken: value('JIRA_API_TOKEN'),
+  };
 }
 
 function authHeader(config: JiraConfig): string {

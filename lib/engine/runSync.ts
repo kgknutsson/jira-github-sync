@@ -13,6 +13,7 @@ import {
 import {
   getIssueStatusName,
   JiraIssueNotFoundError,
+  missingJiraCredentials,
   readJiraConfigFromEnv,
 } from '../adapters/jira/client';
 import { executeAction } from '../actions/executeAction';
@@ -270,12 +271,6 @@ export async function runSyncForContext(
     }
   }
 
-  const jira = readJiraConfigFromEnv();
-  if (!jira) {
-    log.info('Jira secrets not configured; skipping');
-    return;
-  }
-
   const marker = compiled.options.skipMarker;
   if (marker) {
     const texts = await skipTextsForContext(ctx);
@@ -295,6 +290,16 @@ export async function runSyncForContext(
   let keysToProcess = issueKeys;
   if (!compiled.options.processAllMatchingIssueKeys && keysToProcess.length > 1) {
     keysToProcess = [keysToProcess[0]!];
+  }
+
+  const jira = readJiraConfigFromEnv();
+  if (!jira) {
+    log.annotate(
+      'warning',
+      `${keysToProcess.join(', ')} not updated: Jira credentials missing (${missingJiraCredentials().join(', ')}). ` +
+        'Pass them as the jira-* inputs; secrets stored on a GitHub environment also need `environment:` on the job.'
+    );
+    return;
   }
 
   for (const issueKey of keysToProcess) {

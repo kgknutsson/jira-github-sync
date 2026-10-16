@@ -7398,12 +7398,18 @@ var JiraApiError = class extends Error {
     this.status = status;
   }
 };
+var CREDENTIAL_VARS = ["JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_API_TOKEN"];
+function missingJiraCredentials() {
+  return CREDENTIAL_VARS.filter((name) => !process.env[name]?.trim());
+}
 function readJiraConfigFromEnv() {
-  const baseUrl = process.env.JIRA_BASE_URL?.replace(/\/$/, "");
-  const email = process.env.JIRA_USER_EMAIL;
-  const apiToken = process.env.JIRA_API_TOKEN;
-  if (!baseUrl || !email || !apiToken) return null;
-  return { baseUrl, email, apiToken };
+  if (missingJiraCredentials().length > 0) return null;
+  const value = (name) => (process.env[name] ?? "").trim();
+  return {
+    baseUrl: value("JIRA_BASE_URL").replace(/\/+$/, ""),
+    email: value("JIRA_USER_EMAIL"),
+    apiToken: value("JIRA_API_TOKEN")
+  };
 }
 function authHeader(config) {
   const encoded = Buffer.from(`${config.email}:${config.apiToken}`).toString("base64");
@@ -9487,11 +9493,6 @@ async function runSyncForContext(compiled, eventCtx) {
       }
     }
   }
-  const jira = readJiraConfigFromEnv();
-  if (!jira) {
-    log.info("Jira secrets not configured; skipping");
-    return;
-  }
   const marker = compiled.options.skipMarker;
   if (marker) {
     const texts = await skipTextsForContext(ctx);
@@ -9508,6 +9509,14 @@ async function runSyncForContext(compiled, eventCtx) {
   let keysToProcess = issueKeys;
   if (!compiled.options.processAllMatchingIssueKeys && keysToProcess.length > 1) {
     keysToProcess = [keysToProcess[0]];
+  }
+  const jira = readJiraConfigFromEnv();
+  if (!jira) {
+    log.annotate(
+      "warning",
+      `${keysToProcess.join(", ")} not updated: Jira credentials missing (${missingJiraCredentials().join(", ")}). Pass them as the jira-* inputs; secrets stored on a GitHub environment also need \`environment:\` on the job.`
+    );
+    return;
   }
   for (const issueKey of keysToProcess) {
     try {
@@ -9568,7 +9577,7 @@ function loadAndCheck(rules, workflow) {
 async function checkJira(config) {
   const jira = readJiraConfigFromEnv();
   if (!jira) {
-    log.info("Jira credentials not set; skipping the Jira status check");
+    log.annotate("warning", `Jira status check skipped: credentials missing (${missingJiraCredentials().join(", ")})`);
     return true;
   }
   const { accountId } = await verifyJiraConnection(jira);

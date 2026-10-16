@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.1 — 2026-10-16
+
+### Fixed
+
+- Missing Jira credentials are a warning annotation instead of an easy-to-miss log line. The warning names the empty secrets and the issue that was not updated, and only appears when an issue would have changed, so PRs without an issue key (e.g. Dependabot) stay quiet. `validate-only` and `--preflight` warn the same way.
+- Credentials are trimmed, so a secret pasted with a trailing newline no longer fails with `401`.
+
+### Docs
+
+- Keeping the Jira secrets on an environment: `environment: { name, deployment: false }` on the job.
+
 ## 1.0.0 — 2026-10-16
 
 First release as a GitHub Action: `uses: kgknutsson/jira-github-sync@v1` with rules in `.github/jira-sync.config.yml`.

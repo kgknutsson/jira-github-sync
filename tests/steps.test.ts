@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runTransitionAction } from '../lib/actions/transitionAction';
-import { addIssueRemoteLink, type JiraConfig } from '../lib/adapters/jira/client';
+import {
+  addIssueRemoteLink,
+  type JiraConfig,
+  missingJiraCredentials,
+  readJiraConfigFromEnv,
+} from '../lib/adapters/jira/client';
 import { compileConfig } from '../lib/config/compileConfig';
 import { parseConfigText } from '../lib/config/configFile';
 import type { TransitionStep } from '../lib/config/types';
@@ -169,5 +174,22 @@ describe('issue_comment on a pull request', () => {
     await runSyncForContext(compiled, event);
 
     expect(calls.some((c) => c.url.startsWith(JIRA))).toBe(false);
+  });
+});
+
+describe('Jira credentials', () => {
+  it('trims pasted secrets and the trailing slash of the base URL', () => {
+    vi.stubEnv('JIRA_BASE_URL', ' https://jira.test/ \n');
+    vi.stubEnv('JIRA_USER_EMAIL', 'bot@example.com\n');
+    vi.stubEnv('JIRA_API_TOKEN', 'token\r\n');
+    expect(readJiraConfigFromEnv()).toEqual(jira);
+  });
+
+  it('reports blank secrets as missing', () => {
+    vi.stubEnv('JIRA_BASE_URL', JIRA);
+    vi.stubEnv('JIRA_USER_EMAIL', '  ');
+    vi.stubEnv('JIRA_API_TOKEN', '');
+    expect(missingJiraCredentials()).toEqual(['JIRA_USER_EMAIL', 'JIRA_API_TOKEN']);
+    expect(readJiraConfigFromEnv()).toBeNull();
   });
 });

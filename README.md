@@ -65,7 +65,7 @@ rules:
     comment: merged
 ```
 
-**3. Secrets** — add `JIRA_BASE_URL`, `JIRA_USER_EMAIL` and `JIRA_API_TOKEN` (a Jira bot account's API token) to the repository or organization.
+**3. Secrets** — add `JIRA_BASE_URL`, `JIRA_USER_EMAIL` and `JIRA_API_TOKEN` (a Jira bot account's API token) to the repository or organization, or to an environment the job names ([setup](docs/setup.md#2-github-secrets)).
 
 Check everything locally before pushing:
 

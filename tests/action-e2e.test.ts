@@ -139,13 +139,42 @@ describe('action (dist/index.mjs)', () => {
     expect(calls.map((c) => c.url)).toEqual(['/rest/api/3/myself', '/rest/api/3/project/PROJ/statuses']);
   });
 
-  it('skips without Jira credentials', async () => {
+  it('warns, naming the empty secret, when an issue cannot be updated without credentials', async () => {
     const { code, output } = await runAction(
       { GITHUB_EVENT_NAME: 'pull_request', 'INPUT_JIRA-API-TOKEN': '' },
       openedPr
     );
     expect(code, output).toBe(0);
-    expect(output).toContain('Jira secrets not configured; skipping');
+    expect(output).toContain('::warning::PROJ-5 not updated: Jira credentials missing (JIRA_API_TOKEN).');
+    expect(calls).toEqual([]);
+  });
+
+  it('does not warn about credentials when the event has no issue key', async () => {
+    const keyless = {
+      ...openedPr,
+      pull_request: { ...openedPr.pull_request, title: 'Bump deps', head: { ...openedPr.pull_request.head, ref: 'deps' } },
+    };
+    const { code, output } = await runAction(
+      { GITHUB_EVENT_NAME: 'pull_request', 'INPUT_JIRA-API-TOKEN': '' },
+      keyless
+    );
+    expect(code, output).toBe(0);
+    expect(output).toContain('No PROJ issue key for event');
+    expect(output).not.toContain('::warning');
+  });
+
+  it('validate-only warns when credentials are missing', async () => {
+    const { code, output } = await runAction(
+      {
+        GITHUB_EVENT_NAME: 'pull_request',
+        'INPUT_VALIDATE-ONLY': 'true',
+        'INPUT_JIRA-BASE-URL': '',
+        'INPUT_JIRA-USER-EMAIL': '',
+      },
+      openedPr
+    );
+    expect(code, output).toBe(0);
+    expect(output).toContain('::warning::Jira status check skipped: credentials missing (JIRA_BASE_URL, JIRA_USER_EMAIL)');
     expect(calls).toEqual([]);
   });
 
