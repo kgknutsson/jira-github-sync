@@ -1,0 +1,33 @@
+name: 'Jira GitHub Sync'
+description: 'Move Jira issues and post comments from pull requests, reviews, workflow runs, releases and deployments, driven by a YAML rules file.'
+author: 'kgknutsson'
+branding:
+  icon: 'refresh-cw'
+  color: 'blue'
+
+inputs:
+  config-file:
+    description: 'Rules file, relative to the repository root. Check out the repository before this step.'
+    required: false
+    default: '.github/jira-sync.config.yml'
+  jira-base-url:
+    description: 'Jira Cloud site URL, e.g. https://your-site.atlassian.net. When the Jira inputs are empty the action validates and skips.'
+    required: false
+  jira-user-email:
+    description: 'Email of the Atlassian account that owns the API token (use a bot account).'
+    required: false
+  jira-api-token:
+    description: 'Atlassian API token for that account.'
+    required: false
+  github-token:
+    description: 'Token for GitHub API lookups (PR for a commit, PR details for comments, deploy job names).'
+    required: false
+    default: '${{ github.token }}'
+  validate-only:
+    description: "'true' = only validate the rules file and workflow (plus Jira status names when credentials are set); never change Jira."
+    required: false
+    default: 'false'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.mjs'

@@ -1,97 +1,56 @@
-# Copy to your app repo as .github/workflows/jira-sync.yml
-# When vendoring this package under .github/workflows/jira-sync/, use:
-#   run: node .github/workflows/jira-sync/dist/run.mjs
-# If the package is a git submodule, also set `submodules: true` on actions/checkout.
+# Copy to .github/workflows/jira-sync.yml in your repository, next to the rules file
+# .github/jira-sync.config.yml (start from templates/jira-sync.config.yml).
 #
-# Keep triggers in sync with settings.ts: every PrAct / ReviewAct used in rules must be listed
-# under `types`, and every workflow name under workflow_run.workflows (verify.mjs checks this).
+# Keep the triggers in sync with the rules: every action a rule matches must be listed under
+# `types`, and every workflow name under workflow_run.workflows. The action warns in the job log
+# when they drift.
 #
-# Requires secrets: JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN
-name: 'Jira Sync'
+# Secrets: JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN
+name: Jira Sync
 
 on:
   pull_request:
-    types:
-      [
-        opened,
-        reopened,
-        ready_for_review,
-        synchronize,
-        edited,
-        converted_to_draft,
-        closed,
-      ]
-    branches:
-      - dev
-      - test
-      - main
+    types: [opened, reopened, ready_for_review, synchronize, edited, converted_to_draft, closed]
+    branches: [dev, test, main]
   pull_request_review:
     types: [submitted]
   workflow_run:
     workflows: ['Quality Gate', 'Deploy']
     types: [completed]
-  check_suite:
-    types: [completed]
-  check_run:
-    types: [completed]
-  issue_comment:
-    types: [created, edited]
-  push:
-    branches:
-      - dev
-      - test
-      - main
   release:
     types: [published]
-  merge_group:
-    types: [checks_requested, destroyed]
-  deployment_status:
 
-# One queue per PR / issue / run / check / deployment. Never cancel an in-flight sync: a
-# cancelled run can drop the transition for an earlier event (e.g. `opened`).
+# One queue per PR / workflow run / release. Never cancel an in-flight sync: a cancelled run can
+# drop the transition for an earlier event (e.g. `opened`).
 concurrency:
-  group: jira-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.id || github.event.check_suite.id || github.event.check_run.id || github.event.deployment.id || github.sha }}
+  group: jira-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.workflow_run.id || github.event.release.id || github.sha }}
   cancel-in-progress: false
 
 permissions:
   contents: read
   actions: read
   pull-requests: read
-  checks: read
-  deployments: read
-
-env:
-  NODE_VERSION: '24'
 
 jobs:
   jira-sync:
-    name: 'Jira Sync'
+    name: Jira Sync
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: >
+    # Reviews have no branch filter, so match the pull_request branches here; skip workflow runs
+    # that came from forks (they would run with your secrets).
+    if: >-
       (github.event_name != 'pull_request_review' ||
-        github.event.pull_request.base.ref == 'dev' ||
-        github.event.pull_request.base.ref == 'test' ||
-        github.event.pull_request.base.ref == 'main') &&
+        contains(fromJSON('["dev", "test", "main"]'), github.event.pull_request.base.ref)) &&
       (github.event_name != 'workflow_run' ||
         (github.event.workflow_run.repository.id == github.repository_id &&
           github.event.workflow_run.head_repository.id == github.repository_id))
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+          sparse-checkout: .github
+      - uses: kgknutsson/jira-github-sync@v1
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          package-manager-cache: false
-
-      - name: Run Jira sync
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
-          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-        run: node .github/workflows/jira-sync/dist/run.mjs
+          jira-base-url: ${{ secrets.JIRA_BASE_URL }}
+          jira-user-email: ${{ secrets.JIRA_USER_EMAIL }}
+          jira-api-token: ${{ secrets.JIRA_API_TOKEN }}

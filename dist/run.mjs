@@ -1,153 +1,3 @@
-// run.ts
-import { readFileSync } from "node:fs";
-
-// lib/adapters/github/parseEvent.ts
-function stripHeadsPrefix(ref) {
-  return ref.replace(/^refs\/heads\//, "");
-}
-function pullRequestFromPayload(pr) {
-  const merged = pr.merged ?? (pr.merged_at != null && pr.merged_at !== "");
-  return {
-    title: pr.title,
-    headRef: pr.head.ref,
-    body: pr.body,
-    htmlUrl: pr.html_url,
-    merged,
-    draft: pr.draft,
-    state: pr.state === "closed" ? "closed" : "open",
-    baseRef: pr.base.ref,
-    headRepoFullName: pr.head.repo?.full_name ?? "",
-    labels: (pr.labels ?? []).map((l) => l.name),
-    authorLogin: pr.user?.login ?? ""
-  };
-}
-function parseGitHubEvent(eventName, payload) {
-  if (eventName === "pull_request") {
-    const p = payload;
-    if (!p.action || !p.pull_request) return null;
-    return {
-      kind: "pull_request",
-      action: p.action,
-      pr: pullRequestFromPayload(p.pull_request)
-    };
-  }
-  if (eventName === "pull_request_review") {
-    const p = payload;
-    if (!p.action || !p.review?.state || !p.pull_request) return null;
-    return {
-      kind: "pull_request_review",
-      action: p.action,
-      reviewState: p.review.state,
-      pr: pullRequestFromPayload(p.pull_request)
-    };
-  }
-  if (eventName === "workflow_run") {
-    const p = payload;
-    const run = p.workflow_run;
-    if (!run) return null;
-    return {
-      kind: "workflow_run",
-      workflowName: run.name,
-      runEvent: run.event ?? "unknown",
-      conclusion: run.conclusion ?? null,
-      headSha: run.head_sha,
-      headBranch: run.head_branch ?? "",
-      runUrl: run.html_url,
-      runId: run.id
-    };
-  }
-  if (eventName === "check_suite") {
-    const p = payload;
-    const suite = p.check_suite;
-    if (!p.action || !suite?.head_sha) return null;
-    return {
-      kind: "check_suite",
-      action: p.action,
-      conclusion: suite.conclusion ?? null,
-      checkName: suite.app?.name ?? "check_suite",
-      headSha: suite.head_sha,
-      headBranch: suite.head_branch ?? ""
-    };
-  }
-  if (eventName === "check_run") {
-    const p = payload;
-    const run = p.check_run;
-    if (!p.action || !run?.head_sha) return null;
-    return {
-      kind: "check_run",
-      action: p.action,
-      conclusion: run.conclusion ?? null,
-      checkName: run.name ?? "check_run",
-      headSha: run.head_sha,
-      headBranch: run.check_suite?.head_branch ?? "",
-      checkUrl: run.html_url ?? ""
-    };
-  }
-  if (eventName === "issue_comment") {
-    const p = payload;
-    if (!p.action || !p.comment?.body) return null;
-    const issueNumber = p.issue?.number;
-    const onPullRequest = p.issue?.pull_request != null && typeof issueNumber === "number";
-    return {
-      kind: "issue_comment",
-      action: p.action,
-      body: p.comment.body,
-      pullRequestNumber: onPullRequest ? issueNumber : null,
-      commentUrl: p.comment.html_url ?? ""
-    };
-  }
-  if (eventName === "push") {
-    const p = payload;
-    if (!p.ref || !p.after) return null;
-    return {
-      kind: "push",
-      ref: p.ref,
-      headSha: p.after,
-      commitMessages: (p.commits ?? []).map((c) => c.message ?? "")
-    };
-  }
-  if (eventName === "release") {
-    const p = payload;
-    if (!p.action || !p.release?.tag_name) return null;
-    return {
-      kind: "release",
-      action: p.action,
-      tagName: p.release.tag_name,
-      releaseName: p.release.name || p.release.tag_name,
-      releaseUrl: p.release.html_url ?? ""
-    };
-  }
-  if (eventName === "merge_group") {
-    const p = payload;
-    const mg = p.merge_group;
-    if (!p.action || !mg?.head_sha) return null;
-    return {
-      kind: "merge_group",
-      action: p.action,
-      headRef: stripHeadsPrefix(mg.head_ref ?? ""),
-      headSha: mg.head_sha,
-      baseRef: stripHeadsPrefix(mg.base_ref ?? ""),
-      commitMessage: mg.head_commit?.message ?? ""
-    };
-  }
-  if (eventName === "deployment_status") {
-    const p = payload;
-    const dep = p.deployment;
-    const st = p.deployment_status;
-    if (!p.action || !dep?.environment || !st?.state) return null;
-    return {
-      kind: "deployment_status",
-      action: p.action,
-      environment: dep.environment,
-      state: st.state,
-      deploymentUrl: st.environment_url ?? "",
-      headSha: dep.sha ?? "",
-      ref: dep.ref ?? ""
-    };
-  }
-  return null;
-}
-
 // lib/config/jiraConfigLabels.ts
 function jiraStatusNamesFromConfig(built) {
   const names = /* @__PURE__ */ new Set();
@@ -724,6 +574,269 @@ function compileConfig(built, validate = true) {
   };
 }
 
+// lib/engine/eventContext.ts
+import { readFileSync } from "node:fs";
+
+// lib/adapters/github/parseEvent.ts
+function stripHeadsPrefix(ref) {
+  return ref.replace(/^refs\/heads\//, "");
+}
+function pullRequestFromPayload(pr) {
+  const merged = pr.merged ?? (pr.merged_at != null && pr.merged_at !== "");
+  return {
+    title: pr.title,
+    headRef: pr.head.ref,
+    body: pr.body,
+    htmlUrl: pr.html_url,
+    merged,
+    draft: pr.draft,
+    state: pr.state === "closed" ? "closed" : "open",
+    baseRef: pr.base.ref,
+    headRepoFullName: pr.head.repo?.full_name ?? "",
+    labels: (pr.labels ?? []).map((l) => l.name),
+    authorLogin: pr.user?.login ?? ""
+  };
+}
+function parseGitHubEvent(eventName, payload) {
+  if (eventName === "pull_request") {
+    const p = payload;
+    if (!p.action || !p.pull_request) return null;
+    return {
+      kind: "pull_request",
+      action: p.action,
+      pr: pullRequestFromPayload(p.pull_request)
+    };
+  }
+  if (eventName === "pull_request_review") {
+    const p = payload;
+    if (!p.action || !p.review?.state || !p.pull_request) return null;
+    return {
+      kind: "pull_request_review",
+      action: p.action,
+      reviewState: p.review.state,
+      pr: pullRequestFromPayload(p.pull_request)
+    };
+  }
+  if (eventName === "workflow_run") {
+    const p = payload;
+    const run = p.workflow_run;
+    if (!run) return null;
+    return {
+      kind: "workflow_run",
+      workflowName: run.name,
+      runEvent: run.event ?? "unknown",
+      conclusion: run.conclusion ?? null,
+      headSha: run.head_sha,
+      headBranch: run.head_branch ?? "",
+      runUrl: run.html_url,
+      runId: run.id
+    };
+  }
+  if (eventName === "check_suite") {
+    const p = payload;
+    const suite = p.check_suite;
+    if (!p.action || !suite?.head_sha) return null;
+    return {
+      kind: "check_suite",
+      action: p.action,
+      conclusion: suite.conclusion ?? null,
+      checkName: suite.app?.name ?? "check_suite",
+      headSha: suite.head_sha,
+      headBranch: suite.head_branch ?? ""
+    };
+  }
+  if (eventName === "check_run") {
+    const p = payload;
+    const run = p.check_run;
+    if (!p.action || !run?.head_sha) return null;
+    return {
+      kind: "check_run",
+      action: p.action,
+      conclusion: run.conclusion ?? null,
+      checkName: run.name ?? "check_run",
+      headSha: run.head_sha,
+      headBranch: run.check_suite?.head_branch ?? "",
+      checkUrl: run.html_url ?? ""
+    };
+  }
+  if (eventName === "issue_comment") {
+    const p = payload;
+    if (!p.action || !p.comment?.body) return null;
+    const issueNumber = p.issue?.number;
+    const onPullRequest = p.issue?.pull_request != null && typeof issueNumber === "number";
+    return {
+      kind: "issue_comment",
+      action: p.action,
+      body: p.comment.body,
+      pullRequestNumber: onPullRequest ? issueNumber : null,
+      commentUrl: p.comment.html_url ?? ""
+    };
+  }
+  if (eventName === "push") {
+    const p = payload;
+    if (!p.ref || !p.after) return null;
+    return {
+      kind: "push",
+      ref: p.ref,
+      headSha: p.after,
+      commitMessages: (p.commits ?? []).map((c) => c.message ?? "")
+    };
+  }
+  if (eventName === "release") {
+    const p = payload;
+    if (!p.action || !p.release?.tag_name) return null;
+    return {
+      kind: "release",
+      action: p.action,
+      tagName: p.release.tag_name,
+      releaseName: p.release.name || p.release.tag_name,
+      releaseUrl: p.release.html_url ?? ""
+    };
+  }
+  if (eventName === "merge_group") {
+    const p = payload;
+    const mg = p.merge_group;
+    if (!p.action || !mg?.head_sha) return null;
+    return {
+      kind: "merge_group",
+      action: p.action,
+      headRef: stripHeadsPrefix(mg.head_ref ?? ""),
+      headSha: mg.head_sha,
+      baseRef: stripHeadsPrefix(mg.base_ref ?? ""),
+      commitMessage: mg.head_commit?.message ?? ""
+    };
+  }
+  if (eventName === "deployment_status") {
+    const p = payload;
+    const dep = p.deployment;
+    const st = p.deployment_status;
+    if (!p.action || !dep?.environment || !st?.state) return null;
+    return {
+      kind: "deployment_status",
+      action: p.action,
+      environment: dep.environment,
+      state: st.state,
+      deploymentUrl: st.environment_url ?? "",
+      headSha: dep.sha ?? "",
+      ref: dep.ref ?? ""
+    };
+  }
+  return null;
+}
+
+// lib/engine/eventContext.ts
+function contextFromParsed(parsed, repository) {
+  switch (parsed.kind) {
+    case "pull_request":
+      return {
+        event: "pull_request",
+        action: parsed.action,
+        pr: parsed.pr,
+        repository,
+        url: parsed.pr.htmlUrl
+      };
+    case "pull_request_review":
+      return {
+        event: "pull_request_review",
+        action: parsed.action,
+        reviewState: parsed.reviewState,
+        pr: parsed.pr,
+        repository,
+        url: parsed.pr.htmlUrl
+      };
+    case "workflow_run":
+      return {
+        event: "workflow_run",
+        workflowName: parsed.workflowName,
+        runEvent: parsed.runEvent,
+        conclusion: parsed.conclusion,
+        headSha: parsed.headSha,
+        headBranch: parsed.headBranch,
+        runUrl: parsed.runUrl,
+        runId: parsed.runId
+      };
+    case "check_suite":
+      return {
+        event: "check_suite",
+        action: parsed.action,
+        conclusion: parsed.conclusion,
+        checkName: parsed.checkName,
+        headSha: parsed.headSha,
+        headBranch: parsed.headBranch,
+        repository
+      };
+    case "check_run":
+      return {
+        event: "check_run",
+        action: parsed.action,
+        conclusion: parsed.conclusion,
+        checkName: parsed.checkName,
+        headSha: parsed.headSha,
+        headBranch: parsed.headBranch,
+        checkUrl: parsed.checkUrl,
+        repository
+      };
+    case "issue_comment":
+      return {
+        event: "issue_comment",
+        action: parsed.action,
+        body: parsed.body,
+        pullRequestNumber: parsed.pullRequestNumber,
+        pr: null,
+        repository,
+        url: parsed.commentUrl
+      };
+    case "push":
+      return {
+        event: "push",
+        ref: parsed.ref,
+        headSha: parsed.headSha,
+        commitMessages: parsed.commitMessages,
+        repository
+      };
+    case "release":
+      return {
+        event: "release",
+        action: parsed.action,
+        tagName: parsed.tagName,
+        releaseName: parsed.releaseName,
+        releaseUrl: parsed.releaseUrl,
+        repository
+      };
+    case "merge_group":
+      return {
+        event: "merge_group",
+        action: parsed.action,
+        headRef: parsed.headRef,
+        headSha: parsed.headSha,
+        baseRef: parsed.baseRef,
+        commitMessage: parsed.commitMessage,
+        repository
+      };
+    case "deployment_status":
+      return {
+        event: "deployment_status",
+        action: parsed.action,
+        environment: parsed.environment,
+        state: parsed.state,
+        deploymentUrl: parsed.deploymentUrl,
+        headSha: parsed.headSha,
+        ref: parsed.ref,
+        repository
+      };
+  }
+}
+function readEventContext(env = process.env) {
+  const { GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath, GITHUB_REPOSITORY: repository } = env;
+  if (!eventName || !eventPath) {
+    return { skip: "Not running in GitHub Actions (GITHUB_EVENT_NAME / GITHUB_EVENT_PATH missing)" };
+  }
+  if (!repository) return { skip: "GITHUB_REPOSITORY not set" };
+  const parsed = parseGitHubEvent(eventName, JSON.parse(readFileSync(eventPath, "utf8")));
+  if (!parsed) return { skip: `Unsupported or incomplete ${eventName} event` };
+  return { ctx: contextFromParsed(parsed, repository) };
+}
+
 // lib/adapters/github/api.ts
 function readGitHubAuthFromEnv() {
   const token = process.env.GITHUB_TOKEN;
@@ -893,6 +1006,12 @@ function actionTemplateVars(ctx, issueKey, jiraStatus) {
 
 // lib/utils/logger.ts
 var PREFIX = "[jira-sync]";
+function escapeData(text) {
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+function escapeProperty(text) {
+  return escapeData(text).replace(/:/g, "%3A").replace(/,/g, "%2C");
+}
 var log = {
   info(message, err) {
     if (err !== void 0) {
@@ -907,6 +1026,22 @@ var log = {
     } else {
       console.error(`${PREFIX} ${message}`);
     }
+  },
+  /** A workflow annotation (`::warning file=…::`) inside Actions; a plain log line elsewhere. */
+  annotate(level, message, location = {}) {
+    if (process.env.GITHUB_ACTIONS === "true") {
+      const properties = [
+        location.file && `file=${escapeProperty(location.file)}`,
+        location.line && `line=${location.line}`,
+        location.column && `col=${location.column}`
+      ].filter(Boolean).join(",");
+      console.log(`::${level}${properties ? ` ${properties}` : ""}::${escapeData(message)}`);
+      return;
+    }
+    const where = location.file ? `${location.file}${location.line ? `:${location.line}` : ""}${location.column ? `:${location.column}` : ""} ` : "";
+    const line = `${PREFIX} ${level}: ${where}${message}`;
+    if (level === "error") console.error(line);
+    else console.log(line);
   }
 };
 
@@ -1678,109 +1813,6 @@ async function runPreflight() {
   log.info("Jira status preflight OK");
   log.info(`Deploy map: ${JSON.stringify(builtSyncConfig.deploy.environmentToJiraStatus)}`);
 }
-function contextFromParsed(parsed, repository) {
-  switch (parsed.kind) {
-    case "pull_request":
-      return {
-        event: "pull_request",
-        action: parsed.action,
-        pr: parsed.pr,
-        repository,
-        url: parsed.pr.htmlUrl
-      };
-    case "pull_request_review":
-      return {
-        event: "pull_request_review",
-        action: parsed.action,
-        reviewState: parsed.reviewState,
-        pr: parsed.pr,
-        repository,
-        url: parsed.pr.htmlUrl
-      };
-    case "workflow_run":
-      return {
-        event: "workflow_run",
-        workflowName: parsed.workflowName,
-        runEvent: parsed.runEvent,
-        conclusion: parsed.conclusion,
-        headSha: parsed.headSha,
-        headBranch: parsed.headBranch,
-        runUrl: parsed.runUrl,
-        runId: parsed.runId
-      };
-    case "check_suite":
-      return {
-        event: "check_suite",
-        action: parsed.action,
-        conclusion: parsed.conclusion,
-        checkName: parsed.checkName,
-        headSha: parsed.headSha,
-        headBranch: parsed.headBranch,
-        repository
-      };
-    case "check_run":
-      return {
-        event: "check_run",
-        action: parsed.action,
-        conclusion: parsed.conclusion,
-        checkName: parsed.checkName,
-        headSha: parsed.headSha,
-        headBranch: parsed.headBranch,
-        checkUrl: parsed.checkUrl,
-        repository
-      };
-    case "issue_comment":
-      return {
-        event: "issue_comment",
-        action: parsed.action,
-        body: parsed.body,
-        pullRequestNumber: parsed.pullRequestNumber,
-        pr: null,
-        repository,
-        url: parsed.commentUrl
-      };
-    case "push":
-      return {
-        event: "push",
-        ref: parsed.ref,
-        headSha: parsed.headSha,
-        commitMessages: parsed.commitMessages,
-        repository
-      };
-    case "release":
-      return {
-        event: "release",
-        action: parsed.action,
-        tagName: parsed.tagName,
-        releaseName: parsed.releaseName,
-        releaseUrl: parsed.releaseUrl,
-        repository
-      };
-    case "merge_group":
-      return {
-        event: "merge_group",
-        action: parsed.action,
-        headRef: parsed.headRef,
-        headSha: parsed.headSha,
-        baseRef: parsed.baseRef,
-        commitMessage: parsed.commitMessage,
-        repository
-      };
-    case "deployment_status":
-      return {
-        event: "deployment_status",
-        action: parsed.action,
-        environment: parsed.environment,
-        state: parsed.state,
-        deploymentUrl: parsed.deploymentUrl,
-        headSha: parsed.headSha,
-        ref: parsed.ref,
-        repository
-      };
-    default:
-      return null;
-  }
-}
 async function main() {
   if (validateOnly) {
     process.exit(printConfigValidation() ? 0 : 1);
@@ -1789,29 +1821,19 @@ async function main() {
     await runPreflight();
     return;
   }
-  const eventName = process.env.GITHUB_EVENT_NAME;
-  const eventPath = process.env.GITHUB_EVENT_PATH;
-  const repository = process.env.GITHUB_REPOSITORY;
-  if (!eventName || !eventPath) {
+  if (!process.env.GITHUB_EVENT_NAME || !process.env.GITHUB_EVENT_PATH) {
     log.info("Not running in GitHub Actions (missing event env); exit 0");
     log.info("Local checks: node dist/verify.mjs (from the jira-sync package folder)");
     log.info("Jira preflight: node dist/verify.mjs --preflight (needs JIRA_* env)");
     return;
   }
   const compiled = compileConfig(builtSyncConfig);
-  const payload = JSON.parse(readFileSync(eventPath, "utf8"));
-  const parsed = parseGitHubEvent(eventName, payload);
-  if (!parsed) {
-    log.info(`Unsupported event: ${eventName}`);
+  const event = readEventContext();
+  if ("skip" in event) {
+    log.info(`${event.skip}; skipping`);
     return;
   }
-  if (!repository) {
-    log.info("GITHUB_REPOSITORY not set; skipping");
-    return;
-  }
-  const ctx = contextFromParsed(parsed, repository);
-  if (!ctx) return;
-  await runSyncForContext(compiled, ctx);
+  await runSyncForContext(compiled, event.ctx);
 }
 main().catch((err) => {
   log.error("fatal", err);

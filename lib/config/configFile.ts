@@ -5,7 +5,7 @@
  * @module config/configFile
  */
 import { readFileSync } from 'node:fs';
-import { isNode, LineCounter, parseDocument, type Document } from 'yaml';
+import { isMap, isNode, isScalar, LineCounter, parseDocument, type Document } from 'yaml';
 
 import {
   CONDITIONS,
@@ -105,14 +105,22 @@ export function parseConfigText(text: string): LoadedConfig {
   return { config: issues.some((i) => i.level === 'error') ? null : config, issues };
 }
 
-/** Line/column of the deepest existing node on `path`. */
+/** Line/column of the deepest existing key (or node) on `path`. */
 function positionOf(doc: Document, lineCounter: LineCounter, path: Path) {
+  const at = (offset: number) => {
+    const { line, col } = lineCounter.linePos(offset);
+    return { line, column: col };
+  };
   for (let depth = path.length; depth >= 0; depth--) {
-    const node = depth === 0 ? doc.contents : doc.getIn(path.slice(0, depth), true);
-    if (isNode(node) && node.range) {
-      const { line, col } = lineCounter.linePos(node.range[0]);
-      return { line, column: col };
+    const prefix = path.slice(0, depth);
+    const last = prefix[prefix.length - 1];
+    const parent = depth <= 1 ? doc.contents : doc.getIn(prefix.slice(0, -1), true);
+    if (typeof last === 'string' && isMap(parent)) {
+      const pair = parent.items.find((item) => isScalar(item.key) && item.key.value === last);
+      if (pair && isNode(pair.key) && pair.key.range) return at(pair.key.range[0]);
     }
+    const node = depth === 0 ? doc.contents : doc.getIn(prefix, true);
+    if (isNode(node) && node.range) return at(node.range[0]);
   }
   return {};
 }

@@ -1144,6 +1144,12 @@ async function validateJiraStringsAgainstProject(config2, built) {
 
 // lib/utils/logger.ts
 var PREFIX = "[jira-sync]";
+function escapeData(text) {
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+function escapeProperty(text) {
+  return escapeData(text).replace(/:/g, "%3A").replace(/,/g, "%2C");
+}
 var log = {
   info(message, err) {
     if (err !== void 0) {
@@ -1158,6 +1164,22 @@ var log = {
     } else {
       console.error(`${PREFIX} ${message}`);
     }
+  },
+  /** A workflow annotation (`::warning file=…::`) inside Actions; a plain log line elsewhere. */
+  annotate(level, message, location = {}) {
+    if (process.env.GITHUB_ACTIONS === "true") {
+      const properties = [
+        location.file && `file=${escapeProperty(location.file)}`,
+        location.line && `line=${location.line}`,
+        location.column && `col=${location.column}`
+      ].filter(Boolean).join(",");
+      console.log(`::${level}${properties ? ` ${properties}` : ""}::${escapeData(message)}`);
+      return;
+    }
+    const where = location.file ? `${location.file}${location.line ? `:${location.line}` : ""}${location.column ? `:${location.column}` : ""} ` : "";
+    const line = `${PREFIX} ${level}: ${where}${message}`;
+    if (level === "error") console.error(line);
+    else console.log(line);
   }
 };
 

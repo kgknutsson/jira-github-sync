@@ -3,15 +3,12 @@
  *
  * @module run
  */
-import { readFileSync } from 'node:fs';
-
-import { parseGitHubEvent } from './lib/adapters/github/parseEvent';
 import { validateJiraStringsAgainstProject } from './lib/adapters/jira/preflightConfig';
 import { verifyJiraConnection, readJiraConfigFromEnv } from './lib/adapters/jira/client';
 import { compileConfig } from './lib/config/compileConfig';
 import { validateBuiltSyncConfig } from './lib/config/validateConfig';
+import { readEventContext } from './lib/engine/eventContext';
 import { runSyncForContext } from './lib/engine/runSync';
-import type { SyncEventContext } from './lib/engine/types';
 import { log } from './lib/utils/logger';
 import { builtSyncConfig } from './settings';
 
@@ -56,113 +53,6 @@ async function runPreflight(): Promise<void> {
   log.info(`Deploy map: ${JSON.stringify(builtSyncConfig.deploy.environmentToJiraStatus)}`);
 }
 
-function contextFromParsed(
-  parsed: NonNullable<ReturnType<typeof parseGitHubEvent>>,
-  repository: string
-): SyncEventContext | null {
-  switch (parsed.kind) {
-    case 'pull_request':
-      return {
-        event: 'pull_request',
-        action: parsed.action,
-        pr: parsed.pr,
-        repository,
-        url: parsed.pr.htmlUrl,
-      };
-    case 'pull_request_review':
-      return {
-        event: 'pull_request_review',
-        action: parsed.action,
-        reviewState: parsed.reviewState,
-        pr: parsed.pr,
-        repository,
-        url: parsed.pr.htmlUrl,
-      };
-    case 'workflow_run':
-      return {
-        event: 'workflow_run',
-        workflowName: parsed.workflowName,
-        runEvent: parsed.runEvent,
-        conclusion: parsed.conclusion,
-        headSha: parsed.headSha,
-        headBranch: parsed.headBranch,
-        runUrl: parsed.runUrl,
-        runId: parsed.runId,
-      };
-    case 'check_suite':
-      return {
-        event: 'check_suite',
-        action: parsed.action,
-        conclusion: parsed.conclusion,
-        checkName: parsed.checkName,
-        headSha: parsed.headSha,
-        headBranch: parsed.headBranch,
-        repository,
-      };
-    case 'check_run':
-      return {
-        event: 'check_run',
-        action: parsed.action,
-        conclusion: parsed.conclusion,
-        checkName: parsed.checkName,
-        headSha: parsed.headSha,
-        headBranch: parsed.headBranch,
-        checkUrl: parsed.checkUrl,
-        repository,
-      };
-    case 'issue_comment':
-      return {
-        event: 'issue_comment',
-        action: parsed.action,
-        body: parsed.body,
-        pullRequestNumber: parsed.pullRequestNumber,
-        pr: null,
-        repository,
-        url: parsed.commentUrl,
-      };
-    case 'push':
-      return {
-        event: 'push',
-        ref: parsed.ref,
-        headSha: parsed.headSha,
-        commitMessages: parsed.commitMessages,
-        repository,
-      };
-    case 'release':
-      return {
-        event: 'release',
-        action: parsed.action,
-        tagName: parsed.tagName,
-        releaseName: parsed.releaseName,
-        releaseUrl: parsed.releaseUrl,
-        repository,
-      };
-    case 'merge_group':
-      return {
-        event: 'merge_group',
-        action: parsed.action,
-        headRef: parsed.headRef,
-        headSha: parsed.headSha,
-        baseRef: parsed.baseRef,
-        commitMessage: parsed.commitMessage,
-        repository,
-      };
-    case 'deployment_status':
-      return {
-        event: 'deployment_status',
-        action: parsed.action,
-        environment: parsed.environment,
-        state: parsed.state,
-        deploymentUrl: parsed.deploymentUrl,
-        headSha: parsed.headSha,
-        ref: parsed.ref,
-        repository,
-      };
-    default:
-      return null;
-  }
-}
-
 async function main(): Promise<void> {
   if (validateOnly) {
     process.exit(printConfigValidation() ? 0 : 1);
@@ -173,11 +63,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const eventName = process.env.GITHUB_EVENT_NAME;
-  const eventPath = process.env.GITHUB_EVENT_PATH;
-  const repository = process.env.GITHUB_REPOSITORY;
-
-  if (!eventName || !eventPath) {
+  if (!process.env.GITHUB_EVENT_NAME || !process.env.GITHUB_EVENT_PATH) {
     log.info('Not running in GitHub Actions (missing event env); exit 0');
     log.info('Local checks: node dist/verify.mjs (from the jira-sync package folder)');
     log.info('Jira preflight: node dist/verify.mjs --preflight (needs JIRA_* env)');
@@ -185,21 +71,12 @@ async function main(): Promise<void> {
   }
 
   const compiled = compileConfig(builtSyncConfig);
-  const payload = JSON.parse(readFileSync(eventPath, 'utf8')) as unknown;
-  const parsed = parseGitHubEvent(eventName, payload);
-  if (!parsed) {
-    log.info(`Unsupported event: ${eventName}`);
+  const event = readEventContext();
+  if ('skip' in event) {
+    log.info(`${event.skip}; skipping`);
     return;
   }
-
-  if (!repository) {
-    log.info('GITHUB_REPOSITORY not set; skipping');
-    return;
-  }
-  const ctx = contextFromParsed(parsed, repository);
-  if (!ctx) return;
-
-  await runSyncForContext(compiled, ctx);
+  await runSyncForContext(compiled, event.ctx);
 }
 
 main().catch((err: unknown) => {

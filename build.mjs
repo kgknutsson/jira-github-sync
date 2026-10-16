@@ -54,6 +54,19 @@ await esbuild.build({
   entryPoints: [join(here, 'run.ts'), join(here, 'verify.ts')],
 });
 
+await esbuild.build({
+  ...shared,
+  entryPoints: [join(here, 'index.ts')],
+  // Bundled CommonJS dependencies (yaml) call require('process'); give the ESM bundle a real require.
+  banner: {
+    js: [
+      '#!/usr/bin/env node',
+      "import { createRequire as __createRequire } from 'node:module';",
+      'const require = __createRequire(import.meta.url);',
+    ].join('\n'),
+  },
+});
+
 const schemaBuild = await esbuild.build({
   absWorkingDir: here,
   bundle: true,
@@ -72,4 +85,4 @@ writeFileSync(
   `${JSON.stringify(buildConfigSchema(), null, 2)}\n`
 );
 
-console.log('[jira-sync] Built dist/run.mjs, dist/verify.mjs and jira-sync.config.schema.json');
+console.log('[jira-sync] Built dist/ and jira-sync.config.schema.json');
