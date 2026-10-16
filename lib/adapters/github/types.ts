@@ -18,6 +18,8 @@ export type PullRequestRef = {
   headRepoFullName: string;
   labels: string[];
   authorLogin: string;
+  /** Latest commit on the PR, when the source provides it. */
+  headSha?: string;
 };
 
 /** `GITHUB_TOKEN` + `GITHUB_REPOSITORY` from Actions. */

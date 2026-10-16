@@ -8832,7 +8832,8 @@ function pullRequestFromApi(pr) {
     baseRef: pr.base.ref,
     headRepoFullName: pr.head.repo?.full_name ?? "",
     labels: (pr.labels ?? []).map((l) => l.name),
-    authorLogin: pr.user?.login ?? ""
+    authorLogin: pr.user?.login ?? "",
+    ...pr.head.sha ? { headSha: pr.head.sha } : {}
   };
 }
 async function findPullRequestsForCommit(auth, commitSha) {
@@ -9544,6 +9545,11 @@ async function runSyncForContext(compiled, eventCtx) {
       const prs = await findPullRequestsForCommit(gh, ctx.headSha);
       if (prs.some((pr) => !isFromSameRepository(pr, gh.repository))) {
         log.info(`Skipping ${ctx.event} linked to a fork pull request`);
+        return;
+      }
+      const open = prs.filter((pr) => pr.state === "open" && pr.headSha);
+      if (ctx.event === "workflow_run" && ctx.runEvent.startsWith("pull_request") && open.length > 0 && open.every((pr) => pr.headSha !== ctx.headSha)) {
+        log.info(`Skipping ${ctx.workflowName} result for ${ctx.headSha.slice(0, 7)}: the pull request has newer commits`);
         return;
       }
     }

@@ -35,7 +35,7 @@ type PullRequestApiItem = {
   draft?: boolean;
   state: 'open' | 'closed';
   /** `repo` is `null` when the head (fork) repository was deleted. */
-  head: { ref: string; repo: { full_name: string } | null };
+  head: { ref: string; sha?: string; repo: { full_name: string } | null };
   base: { ref: string };
   labels?: { name: string }[];
   user?: { login?: string } | null;
@@ -54,6 +54,7 @@ function pullRequestFromApi(pr: PullRequestApiItem): PullRequestRef {
     headRepoFullName: pr.head.repo?.full_name ?? '',
     labels: (pr.labels ?? []).map((l) => l.name),
     authorLogin: pr.user?.login ?? '',
+    ...(pr.head.sha ? { headSha: pr.head.sha } : {}),
   };
 }
 

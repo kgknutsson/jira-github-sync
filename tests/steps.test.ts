@@ -12,7 +12,7 @@ import { compileConfig } from '../lib/config/compileConfig';
 import { parseConfigText } from '../lib/config/configFile';
 import type { TransitionStep } from '../lib/config/types';
 import { runSyncForContext } from '../lib/engine/runSync';
-import type { CheckSuiteContext, IssueCommentContext } from '../lib/engine/types';
+import type { CheckSuiteContext, IssueCommentContext, WorkflowRunContext } from '../lib/engine/types';
 
 type FetchCall = { method: string; url: string; body: unknown };
 
@@ -175,6 +175,76 @@ describe('issue_comment on a pull request', () => {
     await runSyncForContext(compiled, event);
 
     expect(calls.some((c) => c.url.startsWith(JIRA))).toBe(false);
+  });
+});
+
+describe('pull request runs for superseded commits', () => {
+  const compiled = compileYaml(
+    'projectKey: PROJ',
+    'rules:',
+    '  - name: QG failed',
+    '    when: workflow_run',
+    '    if: { workflow: Quality Gate, runEvent: pull_request, conclusion: failure }',
+    '    ifJiraStatus: In Review',
+    '    transitionTo: In Progress'
+  );
+  const qualityGateFailed = (headSha: string): WorkflowRunContext => ({
+    event: 'workflow_run',
+    workflowName: 'Quality Gate',
+    runEvent: 'pull_request',
+    conclusion: 'failure',
+    headSha,
+    headBranch: 'fix-login',
+    runUrl: 'https://github.com/org/repo/actions/runs/1',
+    runId: 1,
+  });
+  const openPr = {
+    title: 'PROJ-9 Fix login',
+    body: null,
+    html_url: 'https://github.com/org/repo/pull/7',
+    merged_at: null,
+    draft: false,
+    state: 'open',
+    head: { ref: 'fix-login', sha: 'new-sha', repo: { full_name: 'org/repo' } },
+    base: { ref: 'dev' },
+    labels: [],
+    user: { login: 'octocat' },
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('GITHUB_TOKEN', 'gh-token');
+    vi.stubEnv('GITHUB_REPOSITORY', 'org/repo');
+    vi.stubEnv('JIRA_BASE_URL', JIRA);
+    vi.stubEnv('JIRA_USER_EMAIL', 'bot@example.com');
+    vi.stubEnv('JIRA_API_TOKEN', 'token');
+  });
+
+  it('ignores a result for a commit the pull request has moved past', async () => {
+    const calls = stubFetch({ 'GET https://api.github.com/repos/org/repo/commits/old-sha/pulls': [openPr] });
+
+    await runSyncForContext(compiled, qualityGateFailed('old-sha'));
+
+    expect(calls.some((c) => c.url.startsWith(JIRA))).toBe(false);
+  });
+
+  it("acts on the result for the pull request's latest commit", async () => {
+    const calls = stubFetch({
+      'GET https://api.github.com/repos/org/repo/commits/new-sha/pulls': [openPr],
+      'GET https://api.github.com/repos/org/repo/commits/new-sha': { commit: { message: 'PROJ-9 Fix login' } },
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-9?fields=status`]: { fields: { status: { name: 'In Review' } } },
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-9/transitions`]: {
+        transitions: [{ id: '5', name: 'Rework', to: { name: 'In Progress' } }],
+      },
+      [`POST ${JIRA}/rest/api/3/issue/PROJ-9/transitions`]: {},
+    });
+
+    await runSyncForContext(compiled, qualityGateFailed('new-sha'));
+
+    expect(calls).toContainEqual({
+      method: 'POST',
+      url: `${JIRA}/rest/api/3/issue/PROJ-9/transitions`,
+      body: { transition: { id: '5' } },
+    });
   });
 });
 

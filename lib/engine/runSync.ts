@@ -269,6 +269,17 @@ export async function runSyncForContext(
         log.info(`Skipping ${ctx.event} linked to a fork pull request`);
         return;
       }
+      // Older PR runs are not cancelled and can finish after the latest commit's run.
+      const open = prs.filter((pr) => pr.state === 'open' && pr.headSha);
+      if (
+        ctx.event === 'workflow_run' &&
+        ctx.runEvent.startsWith('pull_request') &&
+        open.length > 0 &&
+        open.every((pr) => pr.headSha !== ctx.headSha)
+      ) {
+        log.info(`Skipping ${ctx.workflowName} result for ${ctx.headSha.slice(0, 7)}: the pull request has newer commits`);
+        return;
+      }
     }
   }
 

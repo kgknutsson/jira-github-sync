@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.4 — 2026-10-16
+
+### Fixed
+
+- Results of `workflow_run`s triggered by a pull request are ignored when the PR has newer commits. Older runs are not cancelled, so a failed Quality Gate for an earlier commit could finish after the latest commit's run passed and move the issue back to In Progress. Runs from pushes (deploys) are not affected.
+
 ## 1.0.3 — 2026-10-16
 
 ### Fixed
