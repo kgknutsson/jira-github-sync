@@ -1,8 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { parseGitHubEvent } from '../lib/adapters/github/parseEvent';
-import { config, If, ReviewAct, When } from '../lib/config';
 import { compileConfig } from '../lib/config/compileConfig';
+import { parseConfigText } from '../lib/config/configFile';
 import { validateBuiltSyncConfig } from '../lib/config/validateConfig';
 import { conditionsMatch } from '../lib/engine/matchRule';
 import type { IssueCommentContext, PullRequestContext } from '../lib/engine/types';
@@ -10,9 +11,9 @@ import { createIssueKeyExtractor } from '../lib/utils/issueKey';
 import { parseDeployEnvironment } from '../lib/utils/deployEnvironment';
 import { pickTransition } from '../lib/utils/pickTransition';
 import { formatMessage } from '../lib/utils/formatMessage';
-import { builtSyncConfig } from '../settings';
 
-const compiled = compileConfig(builtSyncConfig);
+const sample = parseConfigText(readFileSync('templates/jira-sync.config.yml', 'utf8')).config!;
+const compiled = compileConfig(sample);
 
 describe('issueKey', () => {
   const extract = createIssueKeyExtractor(compiled.issueKeyPattern);
@@ -138,20 +139,20 @@ describe('parseDeployEnvironment', () => {
   });
 });
 
-describe('settings DSL', () => {
+describe('sample config', () => {
   it('builds named rules', () => {
-    expect(builtSyncConfig.rules[0]?.name).toBe('PR ready → In Review');
-    expect(builtSyncConfig.rules.length).toBeGreaterThanOrEqual(11);
+    expect(sample.rules[0]?.name).toBe('PR ready → In Review');
+    expect(sample.rules).toHaveLength(13);
   });
 
   it('passes config validation', () => {
-    const errors = validateBuiltSyncConfig(builtSyncConfig).filter((i) => i.level === 'error');
-    expect(errors).toEqual([]);
+    expect(validateBuiltSyncConfig(sample)).toEqual([]);
   });
 
   it('includes runtime options', () => {
-    expect(builtSyncConfig.options.resolveKeyFromCommitMessage).toBe(true);
-    expect(builtSyncConfig.options.skipMarker).toBe('[skip-jira]');
+    expect(sample.options.resolveKeyFromCommitMessage).toBe(true);
+    expect(sample.options.skipMarker).toBe('[skip-jira]');
+    expect(sample.options.noTransitionMessageId).toBe('noTransition');
   });
 
   it('compileConfig exposes deploy map', () => {
@@ -165,22 +166,6 @@ describe('settings DSL', () => {
 
   it('formatMessage leaves unknown and prototype keys as written', () => {
     expect(formatMessage('{missing} {constructor}', {})).toBe('{missing} {constructor}');
-  });
-
-  it('review rules accept PR branch/label/author filters', () => {
-    const built = config('PROJ')
-      .messages({ note: 'Reviewed: {url}' })
-      .when(When.PullRequestReview)
-      .if(If.Action, ReviewAct.Submitted)
-      .if(If.BaseRef, 'main')
-      .if(If.Author, 'octocat')
-      .comment('note')
-      .build();
-    expect(built.rules[0]?.when).toEqual({
-      action: 'submitted',
-      baseRef: 'main',
-      author: 'octocat',
-    });
   });
 });
 
@@ -206,7 +191,7 @@ describe('matchRule', () => {
   });
 
   it('matches first PR rule when not draft', () => {
-    const rule = builtSyncConfig.rules.find((r) => r.name === 'PR ready → In Review');
+    const rule = sample.rules.find((r) => r.name === 'PR ready → In Review');
     expect(rule).toBeDefined();
     expect(conditionsMatch(rule!.when, prCtx('opened'), null)).toBe(true);
     expect(conditionsMatch(rule!.when, prCtx('opened', true), null)).toBe(false);

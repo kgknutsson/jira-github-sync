@@ -6,7 +6,6 @@ import { parse as parseYaml } from 'yaml';
 
 import { parseConfigText } from '../lib/config/configFile';
 import { buildConfigSchema } from '../lib/config/configSchema';
-import { builtSyncConfig } from '../settings';
 
 const SAMPLE = readFileSync('templates/jira-sync.config.yml', 'utf8');
 
@@ -31,16 +30,45 @@ describe('rules file', () => {
     expect(config?.rules).toHaveLength(13);
   });
 
-  it('produces the same rules as the TypeScript sample', () => {
-    const fromDsl = JSON.parse(JSON.stringify(builtSyncConfig));
-    for (const rule of fromDsl.rules) {
-      if (rule.when.notDraft) {
-        delete rule.when.notDraft;
-        rule.when.draft = false;
-      }
-    }
-    const fromYaml = JSON.parse(JSON.stringify(parseConfigText(SAMPLE).config));
-    expect(fromYaml).toEqual(fromDsl);
+  it('maps rule keys onto engine rules', () => {
+    const config = parseConfigText(SAMPLE).config!;
+    expect(config.rules[0]).toEqual({
+      id: 'pull_request:pr-ready-in-review',
+      name: 'PR ready → In Review',
+      event: 'pull_request',
+      when: {
+        action: ['opened', 'reopened', 'ready_for_review', 'synchronize', 'edited'],
+        prState: 'open',
+        draft: false,
+        notLabel: 'skip-jira',
+      },
+      then: {
+        kind: 'transition',
+        status: 'In Review',
+        via: ['Start review'],
+        extras: { linkGithub: 'pull_request' },
+      },
+    });
+    expect(config.rules.find((r) => r.name.startsWith('Quality gate failed (in review)'))).toMatchObject({
+      when: { workflow: 'Quality Gate', runEvent: 'pull_request', conclusion: 'failure', jiraStatusIs: 'In Review' },
+      then: { onNoTransition: 'qualityGateFailedNoTransition', commentAfterSuccess: 'qualityGateFailed' },
+    });
+    expect(config.rules.find((r) => r.then.kind === 'deploy')?.then).toMatchObject({
+      commentAfterSuccess: 'deploySuccess',
+      extras: { linkGithub: 'workflow_run' },
+    });
+    expect(config.deploy).toEqual({
+      jobNameRegex: String.raw`Build and Deploy \((dev|test|prod)\)`,
+      branchToEnvironment: { dev: 'dev', test: 'test', main: 'prod' },
+      environmentToJiraStatus: { dev: 'Deployed (Dev)', test: 'Deployed (Test)', prod: 'Done' },
+    });
+  });
+
+  it('accepts PR branch, label and author filters on review rules', () => {
+    const { config } = parseConfigText(
+      withRule('name: Reviewed\nwhen: pull_request_review\nif: { action: submitted, baseRef: main, author: octocat }\ncomment: note')
+    );
+    expect(config?.rules[0]?.when).toEqual({ action: 'submitted', baseRef: 'main', author: 'octocat' });
   });
 
   it('reports unknown keys with a suggestion and the line', () => {

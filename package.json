@@ -16,12 +16,11 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "verify": "node dist/verify.mjs",
     "validate": "node dist/index.mjs validate templates/jira-sync.config.yml --workflow templates/jira-sync.workflow.yml",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "qa": "node build.mjs && tsc --noEmit && vitest run && node dist/verify.mjs && npm run validate"
+    "qa": "node build.mjs && tsc --noEmit && vitest run && npm run validate"
   },
   "devDependencies": {
     "@types/node": "20.19.43",

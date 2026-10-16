@@ -1,90 +1,47 @@
-# Consumer workflow for this repo (package at root). Uses node dist/run.mjs.
-# Vendored apps: see templates/jira-sync.workflow.yml
-name: 'Jira Sync'
+# Runs this repository's own action (uses: ./) with the sample rules, so every push and pull
+# request exercises the committed dist/index.mjs. Other repositories copy
+# templates/jira-sync.workflow.yml instead. Without Jira secrets the action validates and skips.
+name: Jira Sync
 
 on:
   pull_request:
-    types:
-      [
-        opened,
-        reopened,
-        ready_for_review,
-        synchronize,
-        edited,
-        converted_to_draft,
-        closed,
-      ]
-    branches:
-      - dev
-      - test
-      - main
+    types: [opened, reopened, ready_for_review, synchronize, edited, converted_to_draft, closed]
+    branches: [dev, test, main]
   pull_request_review:
     types: [submitted]
   workflow_run:
     workflows: ['Quality Gate', 'Deploy']
     types: [completed]
-  check_suite:
-    types: [completed]
-  check_run:
-    types: [completed]
-  issue_comment:
-    types: [created, edited]
-  push:
-    branches:
-      - dev
-      - test
-      - main
   release:
     types: [published]
-  merge_group:
-    types: [checks_requested, destroyed]
-  deployment_status:
 
-# One queue per PR / issue / run / check / deployment. Never cancel an in-flight sync: a
-# cancelled run can drop the transition for an earlier event (e.g. `opened`).
 concurrency:
-  group: jira-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.id || github.event.check_suite.id || github.event.check_run.id || github.event.deployment.id || github.sha }}
+  group: jira-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.workflow_run.id || github.event.release.id || github.sha }}
   cancel-in-progress: false
 
 permissions:
   contents: read
   actions: read
   pull-requests: read
-  checks: read
-  deployments: read
-
-env:
-  NODE_VERSION: '24'
 
 jobs:
   jira-sync:
-    name: 'Jira Sync'
+    name: Jira Sync
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: >
+    if: >-
       (github.event_name != 'pull_request_review' ||
-        github.event.pull_request.base.ref == 'dev' ||
-        github.event.pull_request.base.ref == 'test' ||
-        github.event.pull_request.base.ref == 'main') &&
+        contains(fromJSON('["dev", "test", "main"]'), github.event.pull_request.base.ref)) &&
       (github.event_name != 'workflow_run' ||
         (github.event.workflow_run.repository.id == github.repository_id &&
           github.event.workflow_run.head_repository.id == github.repository_id))
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+      - uses: ./
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          package-manager-cache: false
-
-      - name: Run Jira sync
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
-          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-        run: node dist/run.mjs
+          config-file: templates/jira-sync.config.yml
+          jira-base-url: ${{ secrets.JIRA_BASE_URL }}
+          jira-user-email: ${{ secrets.JIRA_USER_EMAIL }}
+          jira-api-token: ${{ secrets.JIRA_API_TOKEN }}

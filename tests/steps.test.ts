@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runTransitionAction } from '../lib/actions/transitionAction';
 import { addIssueRemoteLink, type JiraConfig } from '../lib/adapters/jira/client';
-import { CheckEnd, config, If, When } from '../lib/config';
 import { compileConfig } from '../lib/config/compileConfig';
+import { parseConfigText } from '../lib/config/configFile';
 import type { TransitionStep } from '../lib/config/types';
 import { runSyncForContext } from '../lib/engine/runSync';
 import type { CheckSuiteContext, IssueCommentContext } from '../lib/engine/types';
@@ -12,6 +12,13 @@ type FetchCall = { method: string; url: string; body: unknown };
 
 const JIRA = 'https://jira.test';
 const jira: JiraConfig = { baseUrl: JIRA, email: 'bot@example.com', apiToken: 'token' };
+
+/** Compiles a rules file given as YAML lines. */
+function compileYaml(...lines: string[]) {
+  const { config, issues } = parseConfigText(lines.join('\n'));
+  if (!config) throw new Error(JSON.stringify(issues));
+  return compileConfig(config);
+}
 
 /** Routes `METHOD url` to a JSON body; unrouted requests get a 404. */
 function stubFetch(routes: Record<string, unknown>): FetchCall[] {
@@ -46,14 +53,15 @@ afterEach(() => {
 
 describe('transition comments', () => {
   it('fill {url} for events without a PR or run URL (check_suite)', async () => {
-    const compiled = compileConfig(
-      config('PROJ')
-        .options({ noTransitionMessageId: null })
-        .messages({ failed: 'CI failed ({checkName}): {url}' })
-        .when(When.CheckSuite)
-        .if(If.Conclusion, CheckEnd.Failure)
-        .transitionTo('In Progress', { commentAfterSuccess: 'failed' })
-        .build()
+    const compiled = compileYaml(
+      'projectKey: PROJ',
+      "messages: { failed: 'CI failed ({checkName}): {url}' }",
+      'rules:',
+      '  - name: External CI failed',
+      '    when: check_suite',
+      '    if: { conclusion: failure }',
+      '    transitionTo: In Progress',
+      '    commentAfterSuccess: failed'
     );
     const event: CheckSuiteContext = {
       event: 'check_suite',
@@ -100,15 +108,14 @@ describe('remote links', () => {
 });
 
 describe('issue_comment on a pull request', () => {
-  const compiled = compileConfig(
-    config('PROJ')
-      .options({ noTransitionMessageId: null })
-      .messages({ note: 'Comment on {prUrl} targeting {baseRef}' })
-      .when(When.IssueComment)
-      .if(If.Action, 'created')
-      .if(If.BaseRef, 'main')
-      .comment('note')
-      .build()
+  const compiled = compileYaml(
+    'projectKey: PROJ',
+    "messages: { note: 'Comment on {prUrl} targeting {baseRef}' }",
+    'rules:',
+    '  - name: PR comment',
+    '    when: issue_comment',
+    '    if: { action: created, baseRef: main }',
+    '    comment: note'
   );
   const event: IssueCommentContext = {
     event: 'issue_comment',

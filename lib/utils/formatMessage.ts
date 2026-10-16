@@ -1,5 +1,5 @@
 /**
- * Expands `{placeholder}` tokens in Jira comment templates from `settings.ts`.
+ * Expands `{placeholder}` tokens in comment templates from the rules file.
  *
  * @module utils/formatMessage
  */

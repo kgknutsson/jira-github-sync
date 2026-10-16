@@ -7,7 +7,7 @@ import {
   addIssueRemoteLink,
   updateIssueFields,
 } from '../adapters/jira/client';
-import type { JiraStepExtras } from '../config/jiraStepExtras';
+import type { JiraStepExtras } from '../config/types';
 import { formatMessage } from '../utils/formatMessage';
 import { actionTemplateVars } from '../utils/actionTemplateVars';
 import { log } from '../utils/logger';

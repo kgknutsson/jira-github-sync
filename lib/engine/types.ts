@@ -1,5 +1,5 @@
 /**
- * Normalized event contexts passed from `run.ts` into the sync engine.
+ * Normalized event contexts built by `eventContext.ts` and passed into the sync engine.
  *
  * @module engine/types
  */

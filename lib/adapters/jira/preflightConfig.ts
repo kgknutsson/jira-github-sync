@@ -1,16 +1,26 @@
 /**
- * Validates `settings.ts` Jira strings against the live project workflow.
+ * Checks the rules file's Jira status names against the live project workflow.
  *
  * @module adapters/jira/preflightConfig
  */
 import type { BuiltSyncConfig } from '../../config/types';
-import { jiraStatusNamesFromConfig } from '../../config/jiraConfigLabels';
 import type { JiraConfig } from './client';
 import { listProjectStatusNames } from './client';
 
 export type JiraPreflightIssue = { level: 'error' | 'warning'; message: string };
 
-/** Compares configured status names to Jira project workflow columns. */
+/** Every Jira status the config refers to (deploy map, status filters, transition targets). */
+export function jiraStatusNamesFromConfig(built: BuiltSyncConfig): string[] {
+  const names = new Set(Object.values(built.deploy.environmentToJiraStatus));
+  for (const rule of built.rules) {
+    if (rule.when.jiraStatusIs) names.add(rule.when.jiraStatusIs);
+    if (rule.when.jiraStatusIsNot) names.add(rule.when.jiraStatusIsNot);
+    if (rule.then.kind === 'transition') names.add(rule.then.status);
+  }
+  return [...names].sort();
+}
+
+/** Compares configured status names to the statuses in the Jira project's workflows. */
 export async function validateJiraStringsAgainstProject(
   config: JiraConfig,
   built: BuiltSyncConfig
@@ -31,7 +41,7 @@ export async function validateJiraStringsAgainstProject(
     if (!available.has(name)) {
       issues.push({
         level: 'error',
-        message: `Jira project ${built.projectKey} has no status named "${name}" (check settings strings)`,
+        message: `Jira project ${built.projectKey} has no status named "${name}" (check the rules file)`,
       });
     }
   }

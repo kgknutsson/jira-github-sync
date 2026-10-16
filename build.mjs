@@ -1,62 +1,34 @@
 /**
- * Bundles TypeScript sources into committed `dist/run.mjs` and `dist/verify.mjs`, and writes
- * `jira-sync.config.schema.json` from the config catalog.
- *
- * Resolves esbuild from this folder or, when vendored under `.github/workflows/<folder>/`,
- * from the host repository root. After editing sync sources, run `node build.mjs` and commit `dist/`.
+ * Bundles the action into the committed `dist/index.mjs` (plus `dist/licenses.txt` for bundled
+ * dependencies) and writes `jira-sync.config.schema.json` from the config catalog. Run after
+ * editing sources and commit the results.
  *
  * @module build
  */
-import { createRequire } from 'node:module';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import * as esbuild from 'esbuild';
+
 const here = dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
-
-function loadEsbuild() {
-  const candidates = [
-    join(here, '../../../node_modules/esbuild'),
-    join(here, 'node_modules/esbuild'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      return require(candidate);
-    } catch {
-      /* esbuild not at this path — try next candidate */
-    }
-  }
-  throw new Error(
-    'esbuild not found. Run `npm ci` in this folder (or install esbuild at the host repo root).'
-  );
-}
-
-const esbuild = loadEsbuild();
-
-mkdirSync(join(here, 'dist'), { recursive: true });
-
 const shared = {
   absWorkingDir: here,
   bundle: true,
   platform: 'node',
   target: 'node20',
   format: 'esm',
-  logLevel: 'info',
   legalComments: 'none',
-  sourcemap: false,
-  outdir: join(here, 'dist'),
-  outExtension: { '.js': '.mjs' },
 };
 
-await esbuild.build({
-  ...shared,
-  entryPoints: [join(here, 'run.ts'), join(here, 'verify.ts')],
-});
+mkdirSync(join(here, 'dist'), { recursive: true });
 
-await esbuild.build({
+const action = await esbuild.build({
   ...shared,
+  logLevel: 'info',
+  metafile: true,
   entryPoints: [join(here, 'index.ts')],
+  outfile: join(here, 'dist/index.mjs'),
   // Bundled CommonJS dependencies (yaml) call require('process'); give the ESM bundle a real require.
   banner: {
     js: [
@@ -67,12 +39,25 @@ await esbuild.build({
   },
 });
 
+const bundled = new Set(
+  Object.keys(action.metafile.inputs)
+    .map((input) => input.match(/node_modules\/((?:@[^/]+\/)?[^/]+)\//)?.[1])
+    .filter(Boolean)
+);
+const licenses = [...bundled].sort().map((name) => {
+  const dir = join(here, 'node_modules', name);
+  const { version, license } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+  const file = readdirSync(dir).find((entry) => /^licen[cs]e/i.test(entry));
+  const text = file && existsSync(join(dir, file)) ? readFileSync(join(dir, file), 'utf8').trim() : '';
+  return `${name}@${version} (${license})\n\n${text}`;
+});
+writeFileSync(
+  join(here, 'dist/licenses.txt'),
+  `Third-party packages bundled into dist/index.mjs\n\n${licenses.join('\n\n---\n\n')}\n`
+);
+
 const schemaBuild = await esbuild.build({
-  absWorkingDir: here,
-  bundle: true,
-  platform: 'node',
-  target: 'node20',
-  format: 'esm',
+  ...shared,
   logLevel: 'silent',
   write: false,
   entryPoints: [join(here, 'lib/config/configSchema.ts')],

@@ -49,7 +49,6 @@ export function conditionsMatch(
     if (!matchValue(ctx.pr.headRef, when.headRef)) return false;
     if (!matchValue(ctx.pr.authorLogin, when.author)) return false;
     if (!matchLabels(ctx.pr, when)) return false;
-    if (when.notDraft && ctx.pr.draft) return false;
     if (when.draft !== undefined && ctx.pr.draft !== when.draft) return false;
   }
 

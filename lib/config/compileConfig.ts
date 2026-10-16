@@ -1,5 +1,5 @@
 /**
- * Compiles declarative `settings.ts` output into runtime helpers (regexes, lookups).
+ * Compiles a loaded rules file into runtime helpers (regexes, lookups).
  *
  * @module config/compileConfig
  */
@@ -8,7 +8,7 @@ import { DEFAULT_SYNC_OPTIONS } from './syncOptions';
 import { assertValidConfig } from './validateConfig';
 
 /**
- * Runtime helpers derived from built user config (`settings.ts`).
+ * Runtime helpers derived from a loaded rules file.
  *
  * @param validate - When true (default), throws on config errors via {@link assertValidConfig}
  */

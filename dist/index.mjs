@@ -7592,12 +7592,9 @@ async function listProjectStatusNames(config, projectKey) {
   return names;
 }
 
-// lib/config/jiraConfigLabels.ts
+// lib/adapters/jira/preflightConfig.ts
 function jiraStatusNamesFromConfig(built) {
-  const names = /* @__PURE__ */ new Set();
-  for (const status of Object.values(built.deploy.environmentToJiraStatus)) {
-    names.add(status);
-  }
+  const names = new Set(Object.values(built.deploy.environmentToJiraStatus));
   for (const rule of built.rules) {
     if (rule.when.jiraStatusIs) names.add(rule.when.jiraStatusIs);
     if (rule.when.jiraStatusIsNot) names.add(rule.when.jiraStatusIsNot);
@@ -7605,8 +7602,6 @@ function jiraStatusNamesFromConfig(built) {
   }
   return [...names].sort();
 }
-
-// lib/adapters/jira/preflightConfig.ts
 async function validateJiraStringsAgainstProject(config, built) {
   const issues = [];
   let available;
@@ -7623,7 +7618,7 @@ async function validateJiraStringsAgainstProject(config, built) {
     if (!available.has(name)) {
       issues.push({
         level: "error",
-        message: `Jira project ${built.projectKey} has no status named "${name}" (check settings strings)`
+        message: `Jira project ${built.projectKey} has no status named "${name}" (check the rules file)`
       });
     }
   }
@@ -9242,7 +9237,6 @@ function conditionsMatch(when, ctx, jiraStatus) {
     if (!matchValue(ctx.pr.headRef, when.headRef)) return false;
     if (!matchValue(ctx.pr.authorLogin, when.author)) return false;
     if (!matchLabels(ctx.pr, when)) return false;
-    if (when.notDraft && ctx.pr.draft) return false;
     if (when.draft !== void 0 && ctx.pr.draft !== when.draft) return false;
   }
   if (ctx.event === "pull_request_review") {

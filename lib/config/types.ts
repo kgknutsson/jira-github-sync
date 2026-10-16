@@ -1,17 +1,11 @@
 /**
- * Type definitions for sync rules, steps, and built configuration.
+ * Types for a loaded rules file: rules, their conditions and steps, and the whole config.
  *
- * GitHub webhook fields use fixed shapes; Jira {@link JiraStatusName} and
- * {@link JiraTransitionName} are always opaque strings from `settings.ts`.
+ * Jira status, transition and message names are plain strings from the rules file.
  *
  * @module config/types
  */
-import type { JiraStepExtras } from './jiraStepExtras';
-import type { JiraStatusName, JiraTransitionName } from './jiraConfigLabels';
 import type { SyncOptions } from './syncOptions';
-
-export type { JiraStatusName, JiraTransitionName };
-export type { GithubLinkKind, JiraStepExtras } from './jiraStepExtras';
 
 /** GitHub webhook kinds supported by the rule engine. */
 export type GitHubEventKind =
@@ -34,44 +28,51 @@ export type DeployMeta = {
   environmentToJiraStatus: Record<string, string>;
 };
 
-/**
- * Message template id (key in `settings.ts` `.messages({ ... })`).
- * Always a plain string — not defined in `syncCatalog`.
- */
-export type MessageTemplateId = string;
+/** Which GitHub URL `linkGithub` attaches as a Jira remote link. */
+export type GithubLinkKind = 'pull_request' | 'workflow_run' | 'release';
 
-/** Rule action: move issue to a named Jira status column. */
+/** Side effects after a step succeeds (`linkGithub` / `fields` on a rule). */
+export type JiraStepExtras = {
+  /** Add (or update) a Jira remote link to the PR, workflow run or release. */
+  linkGithub?: GithubLinkKind;
+  /** Jira field id → value template (supports `{placeholders}`). */
+  fields?: Record<string, string>;
+};
+
+/** Rule action: move the issue to a named Jira status. */
 export type TransitionStep = {
   kind: 'transition';
-  status: JiraStatusName;
-  via?: readonly JiraTransitionName[];
+  status: string;
+  /** Transition names to prefer when several lead to `status`. */
+  via?: readonly string[];
   /** Overrides {@link SyncOptions.noTransitionMessageId} for this step only. */
-  onNoTransition?: MessageTemplateId;
-  commentAfterSuccess?: MessageTemplateId;
-  commentWhenSkipped?: MessageTemplateId;
+  onNoTransition?: string;
+  commentAfterSuccess?: string;
+  commentWhenSkipped?: string;
   extras?: JiraStepExtras;
 };
 
-/** Rule action: infer deploy env from workflow run and transition accordingly. */
+/** Rule action: infer the deploy environment from the workflow run and move the issue. */
 export type DeployTransitionStep = {
   kind: 'deploy';
-  onNoTransition?: MessageTemplateId;
-  commentAfterSuccess?: MessageTemplateId;
-  commentWhenSkipped?: MessageTemplateId;
+  onNoTransition?: string;
+  commentAfterSuccess?: string;
+  commentWhenSkipped?: string;
   extras?: JiraStepExtras;
 };
 
 /** Rule action: post a templated comment only. */
 export type CommentStep = {
   kind: 'comment';
-  messageKey: MessageTemplateId;
+  /** Message template id from `messages`. */
+  messageKey: string;
   extras?: JiraStepExtras;
 };
 
 /** Discriminated union of actions a rule can execute. */
 export type RuleStep = TransitionStep | DeployTransitionStep | CommentStep;
 
-/** `when` clause fields compared against the GitHub event (+ optional Jira status). */
+/** A rule's `if:` conditions (plus its Jira status filters), compared against the event. */
 export type RuleConditions = {
   action?: string | readonly string[];
   reviewState?: string | readonly string[];
@@ -81,10 +82,11 @@ export type RuleConditions = {
   conclusion?: string | readonly string[];
   merged?: boolean;
   draft?: boolean;
-  notDraft?: boolean;
   /** pull_request.state (open vs closed) */
-  prState?: 'open' | 'closed' | readonly ('open' | 'closed')[];
+  prState?: string | readonly string[];
+  /** `ifJiraStatus` in the rules file */
   jiraStatusIs?: string;
+  /** `unlessJiraStatus` in the rules file */
   jiraStatusIsNot?: string;
   /** PR base branch (pull_request, review, PR comment) or merge_group base branch */
   baseRef?: string | readonly string[];
@@ -106,8 +108,9 @@ export type RuleConditions = {
   releaseTag?: string | readonly string[];
 };
 
-/** One if-this-then-that rule in `settings.ts`. */
+/** One rule from the rules file. */
 export type SyncRule = {
+  /** `<event>:<slug of name>`, unique per config */
   id: string;
   /** Human-readable label (logs + debugging) */
   name: string;
@@ -116,7 +119,7 @@ export type SyncRule = {
   then: RuleStep;
 };
 
-/** Output of `config(projectKey).…build()` in `settings.ts`. */
+/** A loaded and validated rules file. */
 export type BuiltSyncConfig = {
   projectKey: string;
   messages: Record<string, string>;

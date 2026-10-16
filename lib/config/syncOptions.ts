@@ -1,23 +1,17 @@
 /**
- * Runtime options for issue-key resolution, skip markers, and Jira error handling.
- *
- * **GitHub source:** N/A — repo policy in `settings.ts` via `.options({ … })`.
- *
- * **Use with:** Usually the first chain call after `config('PROJECT')` (any position before
- * `.build()` works).
+ * Runtime options for issue-key resolution, skip markers, and Jira error handling
+ * (`options:` in the rules file).
  *
  * @module config/syncOptions
  *
  * @example Typical options
- * ```ts
- * config('PROJ')
- *   .options({
- *     resolveKeyFromCommitMessage: true,
- *     processAllMatchingIssueKeys: false,
- *     failOnJiraError: true,
- *     skipMarker: '[skip-jira]',
- *     noTransitionMessageId: 'noTransition',
- *   })
+ * ```yaml
+ * options:
+ *   resolveKeyFromCommitMessage: true
+ *   processAllMatchingIssueKeys: false
+ *   failOnJiraError: true
+ *   skipMarker: '[skip-jira]'
+ *   noTransitionMessageId: noTransition
  * ```
  */
 
@@ -39,17 +33,17 @@ export type SyncOptions = {
   failOnJiraError: boolean;
   /**
    * Skip sync when PR/commit/comment text contains this substring (case-insensitive).
-   * Set `null` to disable. Complements {@link If.NotLabel} for label-based opt-out.
+   * Set `null` to disable. Complements a `notLabel` condition for label-based opt-out.
    */
   skipMarker: string | null;
   /**
-   * Default `.messages({ … })` key when a transition/deploy cannot run and the rule omits
-   * `onNoTransition`. Set `null` to post no comment. Must exist in `.messages(...)`.
+   * Message id posted when a transition/deploy cannot run and the rule has no `onNoTransition`.
+   * `null` posts nothing. Defaults to `noTransition` when the rules file defines that message.
    */
   noTransitionMessageId: string | null;
 };
 
-/** Defaults applied before `settings.ts` `.options({ … })` overrides. */
+/** Defaults applied before the rules file's `options:` overrides. */
 export const DEFAULT_SYNC_OPTIONS: SyncOptions = {
   resolveKeyFromCommitMessage: true,
   processAllMatchingIssueKeys: false,
