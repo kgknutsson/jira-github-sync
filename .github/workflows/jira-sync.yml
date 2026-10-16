@@ -13,18 +13,13 @@ on:
         edited,
         converted_to_draft,
         closed,
-        labeled,
-        unlabeled,
-        review_requested,
-        assigned,
-        auto_merge_enabled,
       ]
     branches:
       - dev
       - test
       - main
   pull_request_review:
-    types: [submitted, dismissed, edited]
+    types: [submitted]
   workflow_run:
     workflows: ['Quality Gate', 'Deploy']
     types: [completed]
@@ -45,9 +40,11 @@ on:
     types: [checks_requested, destroyed]
   deployment_status:
 
+# One queue per PR / issue / run / check / deployment. Never cancel an in-flight sync: a
+# cancelled run can drop the transition for an earlier event (e.g. `opened`).
 concurrency:
-  group: jira-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.workflow_run.id || github.sha }}
-  cancel-in-progress: true
+  group: jira-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.id || github.event.check_suite.id || github.event.check_run.id || github.event.deployment.id || github.sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -57,7 +54,7 @@ permissions:
   deployments: read
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '24'
 
 jobs:
   jira-sync:
@@ -74,12 +71,15 @@ jobs:
           github.event.workflow_run.head_repository.id == github.repository_id))
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Run Jira sync
         env:
