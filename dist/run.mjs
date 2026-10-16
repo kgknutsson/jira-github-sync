@@ -419,84 +419,273 @@ var DEFAULT_SYNC_OPTIONS = {
   noTransitionMessageId: "noTransition"
 };
 
+// lib/config/catalog.ts
+var EVENTS = {
+  pull_request: "Pull request opened, updated, marked ready, converted to draft, closed, \u2026",
+  pull_request_review: "Review submitted, edited or dismissed on a pull request.",
+  workflow_run: "A GitHub Actions workflow finished (CI, deploy, \u2026). Match it with the `workflow` condition.",
+  check_suite: "Check suite completed. Third-party CI apps only: GitHub never triggers workflows for checks created by GitHub Actions.",
+  check_run: "Single check run completed. Third-party CI apps only, like check_suite.",
+  issue_comment: "Comment created, edited or deleted on an issue or pull request.",
+  push: "Commits pushed to a branch. Issue keys come from the commit messages and branch.",
+  release: "Release published, created, edited, \u2026",
+  merge_group: "Merge queue checks requested, or merge group destroyed.",
+  deployment_status: "Deployment status reported for a GitHub Environment."
+};
+var EVENT_NAMES = Object.keys(EVENTS);
+var EVENT_ACTIONS = {
+  pull_request: [
+    "assigned",
+    "auto_merge_disabled",
+    "auto_merge_enabled",
+    "closed",
+    "converted_to_draft",
+    "demilestoned",
+    "dequeued",
+    "edited",
+    "enqueued",
+    "labeled",
+    "locked",
+    "milestoned",
+    "opened",
+    "ready_for_review",
+    "reopened",
+    "review_request_removed",
+    "review_requested",
+    "synchronize",
+    "unassigned",
+    "unlabeled",
+    "unlocked"
+  ],
+  pull_request_review: ["submitted", "edited", "dismissed"],
+  check_suite: ["completed"],
+  check_run: ["completed"],
+  issue_comment: ["created", "edited", "deleted"],
+  release: ["published", "unpublished", "created", "edited", "deleted", "prereleased", "released"],
+  merge_group: ["checks_requested", "destroyed"],
+  deployment_status: ["created"]
+};
+var CONCLUSIONS = [
+  "success",
+  "failure",
+  "cancelled",
+  "timed_out",
+  "action_required",
+  "neutral",
+  "skipped",
+  "stale",
+  "startup_failure"
+];
+var PR_EVENTS = ["pull_request", "pull_request_review"];
+var CONDITIONS = {
+  action: {
+    description: "Webhook action, e.g. opened, closed, submitted, published.",
+    events: Object.keys(EVENT_ACTIONS),
+    type: "string",
+    values: "action"
+  },
+  reviewState: {
+    description: "Review outcome.",
+    events: ["pull_request_review"],
+    type: "string",
+    values: ["approved", "changes_requested", "commented", "dismissed"]
+  },
+  workflow: {
+    description: "Workflow `name:` of the finished run. Also list it under on.workflow_run.workflows in the workflow file.",
+    events: ["workflow_run"],
+    type: "string"
+  },
+  runEvent: {
+    description: "What triggered the run: pull_request, push, workflow_dispatch, schedule, \u2026",
+    events: ["workflow_run"],
+    type: "string"
+  },
+  conclusion: {
+    description: "Run or check result.",
+    events: ["workflow_run", "check_suite", "check_run"],
+    type: "string",
+    values: CONCLUSIONS
+  },
+  prState: {
+    description: "Pull request state.",
+    events: PR_EVENTS,
+    type: "string",
+    values: ["open", "closed"]
+  },
+  merged: {
+    description: "true for merged pull requests (use with action: closed).",
+    events: ["pull_request"],
+    type: "boolean"
+  },
+  draft: {
+    description: "false for pull requests ready for review, true for drafts.",
+    events: ["pull_request"],
+    type: "boolean"
+  },
+  baseRef: {
+    description: "Target branch, without refs/heads/.",
+    events: [...PR_EVENTS, "issue_comment", "merge_group"],
+    type: "string"
+  },
+  headRef: {
+    description: "Source branch (push: the pushed branch), without refs/heads/.",
+    events: [...PR_EVENTS, "issue_comment", "merge_group", "push"],
+    type: "string"
+  },
+  label: {
+    description: "The pull request has at least one of these labels.",
+    events: [...PR_EVENTS, "issue_comment"],
+    type: "string"
+  },
+  notLabel: {
+    description: "The pull request has none of these labels (e.g. an opt-out label).",
+    events: [...PR_EVENTS, "issue_comment"],
+    type: "string"
+  },
+  author: {
+    description: "GitHub login of the pull request author.",
+    events: PR_EVENTS,
+    type: "string"
+  },
+  checkName: {
+    description: "Check suite app name or check run name (third-party CI).",
+    events: ["check_suite", "check_run"],
+    type: "string"
+  },
+  deploymentEnvironment: {
+    description: "GitHub Environment name.",
+    events: ["deployment_status"],
+    type: "string"
+  },
+  deploymentState: {
+    description: "Deployment status.",
+    events: ["deployment_status"],
+    type: "string",
+    values: ["success", "failure", "error", "pending", "inactive", "in_progress", "queued"]
+  },
+  releaseTag: {
+    description: "Release tag name, e.g. v1.2.0 (quote numbers).",
+    events: ["release"],
+    type: "string"
+  }
+};
+var PLACEHOLDERS = {
+  issueKey: "Jira issue key, e.g. PROJ-123",
+  url: "Main link: PR, workflow run, release, comment, or commit/checks page",
+  prUrl: "Pull request URL (pull_request, pull_request_review, PR comments)",
+  baseRef: "Target branch",
+  headRef: "Source or pushed branch",
+  currentStatus: "Jira status when the rule matched",
+  targetStatus: "Status a transition or deploy step moves to",
+  status: "Target status in transition/deploy comments; current status in comment rules",
+  env: "Deploy environment (deploy steps) or GitHub Environment (deployment_status)",
+  workflowName: "Workflow name (workflow_run)",
+  runEvent: "What triggered the workflow run",
+  conclusion: "Run or check conclusion",
+  checkName: "Check name",
+  author: "Pull request author login",
+  labels: "Comma-separated pull request labels",
+  releaseTag: "Release tag",
+  releaseName: "Release name",
+  ref: "Pushed ref (push)",
+  deploymentState: "Deployment state (deployment_status)"
+};
+
 // lib/config/validateConfig.ts
-function collectMessageKeysFromStep(step) {
-  const keys = [];
-  if (step.kind === "comment") keys.push(step.messageKey);
-  if (step.kind === "transition") {
-    if (step.onNoTransition) keys.push(step.onNoTransition);
-    if (step.commentAfterSuccess) keys.push(step.commentAfterSuccess);
-    if (step.commentWhenSkipped) keys.push(step.commentWhenSkipped);
-  }
-  if (step.kind === "deploy") {
-    if (step.onNoTransition) keys.push(step.onNoTransition);
-    if (step.commentAfterSuccess) keys.push(step.commentAfterSuccess);
-    if (step.commentWhenSkipped) keys.push(step.commentWhenSkipped);
-  }
-  return keys;
+var STEP_MESSAGE_FIELDS = ["onNoTransition", "commentAfterSuccess", "commentWhenSkipped"];
+function messageReferences(step) {
+  if (step.kind === "comment") return [{ field: "comment", key: step.messageKey }];
+  return STEP_MESSAGE_FIELDS.flatMap((field) => {
+    const key = step[field];
+    return key ? [{ field, key }] : [];
+  });
+}
+function unknownPlaceholders(template) {
+  return [...template.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).filter((name) => !Object.hasOwn(PLACEHOLDERS, name));
 }
 function validateBuiltSyncConfig(built) {
   const issues = [];
   if (!built.projectKey.trim()) {
-    issues.push({ level: "error", message: "projectKey is empty" });
+    issues.push({ level: "error", message: "projectKey is empty", path: ["projectKey"] });
   }
   if (built.rules.length === 0) {
-    issues.push({ level: "error", message: "No rules defined" });
+    issues.push({ level: "error", message: "No rules defined", path: ["rules"] });
   }
-  const ruleIds = /* @__PURE__ */ new Set();
-  for (const rule of built.rules) {
-    if (ruleIds.has(rule.id)) {
-      issues.push({ level: "error", message: `Duplicate rule id: ${rule.id}` });
+  const namesById = /* @__PURE__ */ new Map();
+  built.rules.forEach((rule, index) => {
+    const other = namesById.get(rule.id);
+    if (other !== void 0) {
+      issues.push({
+        level: "error",
+        message: `Rules "${other}" and "${rule.name}" get the same id (${rule.id}); give them different names`,
+        path: ["rules", index, "name"]
+      });
     }
-    ruleIds.add(rule.id);
-    for (const key of collectMessageKeysFromStep(rule.then)) {
-      if (!built.messages[key]) {
+    namesById.set(rule.id, rule.name);
+    for (const { field, key } of messageReferences(rule.then)) {
+      if (!Object.hasOwn(built.messages, key)) {
         issues.push({
           level: "error",
-          message: `Rule "${rule.name}" references unknown message key: ${key}`
+          message: `Rule "${rule.name}" references unknown message "${key}"`,
+          path: ["rules", index, field]
         });
       }
     }
-  }
-  try {
-    new RegExp(built.deploy.jobNameRegex);
-  } catch {
-    issues.push({ level: "error", message: "deploy.jobNameRegex is invalid" });
-  }
-  const envKeys = Object.keys(built.deploy.environmentToJiraStatus);
-  for (const branch of Object.values(built.deploy.branchToEnvironment)) {
-    if (!envKeys.includes(branch)) {
+    for (const [fieldId, template] of Object.entries(rule.then.extras?.fields ?? {})) {
+      for (const name of unknownPlaceholders(template)) {
+        issues.push({
+          level: "warning",
+          message: `Rule "${rule.name}" field ${fieldId} uses unknown placeholder {${name}}`,
+          path: ["rules", index, "fields", fieldId]
+        });
+      }
+    }
+  });
+  if (built.deploy.jobNameRegex !== void 0) {
+    try {
+      new RegExp(built.deploy.jobNameRegex);
+    } catch {
       issues.push({
-        level: "warning",
-        message: `branchToEnvironment maps to "${branch}" but environmentToJiraStatus has no such key`
+        level: "error",
+        message: "deploy.jobNameRegex is not a valid regular expression",
+        path: ["deploy", "jobNameRegex"]
       });
     }
   }
-  if (Object.keys(built.messages).length === 0) {
-    issues.push({ level: "warning", message: "No message templates defined" });
-  }
-  const defaultNoTransition = {
-    ...DEFAULT_SYNC_OPTIONS,
-    ...built.options
-  }.noTransitionMessageId;
-  if (defaultNoTransition != null && !built.messages[defaultNoTransition]) {
-    issues.push({
-      level: "error",
-      message: `options.noTransitionMessageId references unknown message key: ${defaultNoTransition}`
-    });
-  }
-  const referenced = /* @__PURE__ */ new Set();
-  if (defaultNoTransition) referenced.add(defaultNoTransition);
-  for (const rule of built.rules) {
-    for (const key of collectMessageKeysFromStep(rule.then)) {
-      referenced.add(key);
+  for (const [branch, env] of Object.entries(built.deploy.branchToEnvironment)) {
+    if (!Object.hasOwn(built.deploy.environmentToJiraStatus, env)) {
+      issues.push({
+        level: "warning",
+        message: `deploy.branchToEnvironment maps "${branch}" to "${env}", which environmentToJiraStatus does not list`,
+        path: ["deploy", "branchToEnvironment", branch]
+      });
     }
   }
-  for (const key of Object.keys(built.messages)) {
+  const defaultNoTransition = { ...DEFAULT_SYNC_OPTIONS, ...built.options }.noTransitionMessageId;
+  if (defaultNoTransition != null && !Object.hasOwn(built.messages, defaultNoTransition)) {
+    issues.push({
+      level: "error",
+      message: `options.noTransitionMessageId references unknown message "${defaultNoTransition}" (add it to messages or set it to null)`,
+      path: ["options", "noTransitionMessageId"]
+    });
+  }
+  const referenced = new Set(defaultNoTransition ? [defaultNoTransition] : []);
+  for (const rule of built.rules) {
+    for (const { key } of messageReferences(rule.then)) referenced.add(key);
+  }
+  for (const [key, template] of Object.entries(built.messages)) {
     if (!referenced.has(key)) {
       issues.push({
         level: "warning",
-        message: `Message template "${key}" is never referenced by a rule`
+        message: `Message "${key}" is not used by any rule`,
+        path: ["messages", key]
+      });
+    }
+    for (const name of unknownPlaceholders(template)) {
+      issues.push({
+        level: "warning",
+        message: `Message "${key}" uses unknown placeholder {${name}}`,
+        path: ["messages", key]
       });
     }
   }
@@ -505,10 +694,8 @@ function validateBuiltSyncConfig(built) {
 function assertValidConfig(built) {
   const issues = validateBuiltSyncConfig(built).filter((i) => i.level === "error");
   if (issues.length > 0) {
-    throw new Error(
-      `Invalid jira-sync settings:
-${issues.map((i) => `- ${i.message}`).join("\n")}`
-    );
+    throw new Error(`Invalid jira-sync config:
+${issues.map((i) => `- ${i.message}`).join("\n")}`);
   }
 }
 
@@ -526,7 +713,7 @@ function compileConfig(built, validate = true) {
     projectKey: built.projectKey,
     options,
     issueKeyPattern,
-    deployJobPattern: new RegExp(built.deploy.jobNameRegex),
+    deployJobPattern: built.deploy.jobNameRegex ? new RegExp(built.deploy.jobNameRegex) : null,
     deployEnvToStatus: built.deploy.environmentToJiraStatus,
     branchToDeployEnv: built.deploy.branchToEnvironment,
     messageTemplate(key) {
@@ -771,10 +958,12 @@ async function runCommentAction(step, ctx) {
 
 // lib/utils/deployEnvironment.ts
 function parseDeployEnvironment(jobs, headBranch, jobNamePattern, branchToEnv, validEnvKeys, options) {
-  for (const job of jobs) {
-    const match = job.name.match(jobNamePattern);
-    if (match?.[1] && Object.hasOwn(validEnvKeys, match[1])) {
-      return match[1];
+  if (jobNamePattern) {
+    for (const job of jobs) {
+      const match = job.name.match(jobNamePattern);
+      if (match?.[1] && Object.hasOwn(validEnvKeys, match[1])) {
+        return match[1];
+      }
     }
   }
   if (options?.allowBranchFallback === false) {

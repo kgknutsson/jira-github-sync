@@ -1,5 +1,6 @@
 /**
- * Bundles TypeScript sources into committed `dist/run.mjs` and `dist/verify.mjs`.
+ * Bundles TypeScript sources into committed `dist/run.mjs` and `dist/verify.mjs`, and writes
+ * `jira-sync.config.schema.json` from the config catalog.
  *
  * Resolves esbuild from this folder or, when vendored under `.github/workflows/<folder>/`,
  * from the host repository root. After editing sync sources, run `node build.mjs` and commit `dist/`.
@@ -7,7 +8,7 @@
  * @module build
  */
 import { createRequire } from 'node:module';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -53,4 +54,22 @@ await esbuild.build({
   entryPoints: [join(here, 'run.ts'), join(here, 'verify.ts')],
 });
 
-console.log('[jira-sync] Built dist/run.mjs and dist/verify.mjs');
+const schemaBuild = await esbuild.build({
+  absWorkingDir: here,
+  bundle: true,
+  platform: 'node',
+  target: 'node20',
+  format: 'esm',
+  logLevel: 'silent',
+  write: false,
+  entryPoints: [join(here, 'lib/config/configSchema.ts')],
+  outfile: join(here, 'schema.mjs'),
+});
+const schemaModule = Buffer.from(schemaBuild.outputFiles[0].text).toString('base64');
+const { buildConfigSchema } = await import(`data:text/javascript;base64,${schemaModule}`);
+writeFileSync(
+  join(here, 'jira-sync.config.schema.json'),
+  `${JSON.stringify(buildConfigSchema(), null, 2)}\n`
+);
+
+console.log('[jira-sync] Built dist/run.mjs, dist/verify.mjs and jira-sync.config.schema.json');

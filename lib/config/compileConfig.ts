@@ -28,7 +28,7 @@ export function compileConfig(built: BuiltSyncConfig, validate = true) {
     projectKey: built.projectKey,
     options,
     issueKeyPattern,
-    deployJobPattern: new RegExp(built.deploy.jobNameRegex),
+    deployJobPattern: built.deploy.jobNameRegex ? new RegExp(built.deploy.jobNameRegex) : null,
     deployEnvToStatus: built.deploy.environmentToJiraStatus,
     branchToDeployEnv: built.deploy.branchToEnvironment,
     messageTemplate(key: string): string {

@@ -15,15 +15,17 @@ export type WorkflowJobSummary = { name: string };
 export function parseDeployEnvironment(
   jobs: WorkflowJobSummary[],
   headBranch: string | null | undefined,
-  jobNamePattern: RegExp,
+  jobNamePattern: RegExp | null,
   branchToEnv: Record<string, string>,
   validEnvKeys: Record<string, string>,
   options?: { allowBranchFallback?: boolean }
 ): string | null {
-  for (const job of jobs) {
-    const match = job.name.match(jobNamePattern);
-    if (match?.[1] && Object.hasOwn(validEnvKeys, match[1])) {
-      return match[1];
+  if (jobNamePattern) {
+    for (const job of jobs) {
+      const match = job.name.match(jobNamePattern);
+      if (match?.[1] && Object.hasOwn(validEnvKeys, match[1])) {
+        return match[1];
+      }
     }
   }
 

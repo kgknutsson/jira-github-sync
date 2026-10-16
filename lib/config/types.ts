@@ -28,7 +28,8 @@ export type GitHubEventKind =
 
 /** Maps deploy workflow jobs / branches to Jira deploy columns. */
 export type DeployMeta = {
-  jobNameRegex: string;
+  /** Regex on deploy job names; capture group 1 = environment. Omit to use only the branch map. */
+  jobNameRegex?: string;
   branchToEnvironment: Record<string, string>;
   environmentToJiraStatus: Record<string, string>;
 };

@@ -1,0 +1,1329 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/kgknutsson/jira-github-sync/v1/jira-sync.config.schema.json",
+  "title": "jira-github-sync rules",
+  "description": "Rules that move Jira issues and post comments from GitHub events.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "projectKey",
+    "rules"
+  ],
+  "properties": {
+    "projectKey": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "description": "Jira project key; issue keys look like PROJ-123."
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Runtime behavior.",
+      "properties": {
+        "resolveKeyFromCommitMessage": {
+          "type": "boolean",
+          "description": "workflow_run / check / deployment events: also read keys from the head commit message. Default true."
+        },
+        "processAllMatchingIssueKeys": {
+          "type": "boolean",
+          "description": "Apply the matched rule to every issue key found instead of only the first. Default false."
+        },
+        "failOnJiraError": {
+          "type": "boolean",
+          "description": "Fail the job on Jira API errors (missing issues are always skipped). Default true."
+        },
+        "skipMarker": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Skip events whose PR/commit/comment text contains this (case-insensitive). Default '[skip-jira]'; quote it."
+        },
+        "noTransitionMessageId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Message posted when Jira has no transition to the target status. Default noTransition when that message exists."
+        }
+      }
+    },
+    "messages": {
+      "type": "object",
+      "description": "Comment templates by id. Placeholders: {issueKey}, {url}, {prUrl}, {baseRef}, {headRef}, {currentStatus}, {targetStatus}, {status}, {env}, {workflowName}, {runEvent}, {conclusion}, {checkName}, {author}, {labels}, {releaseTag}, {releaseName}, {ref}, {deploymentState}.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Maps deploy runs to Jira statuses for deployToJiraStatus rules.",
+      "properties": {
+        "jobNameRegex": {
+          "type": "string",
+          "description": "Regex on deploy job names; capture group 1 is the environment, e.g. Build and Deploy \\((dev|prod)\\)."
+        },
+        "branchToEnvironment": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Fallback for push-triggered runs when no job name matches: branch → environment."
+        },
+        "environmentToJiraStatus": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment → exact Jira status name."
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Checked top to bottom; the first matching rule runs.",
+      "items": {
+        "$ref": "#/definitions/rule"
+      }
+    }
+  },
+  "definitions": {
+    "rule": {
+      "type": "object",
+      "required": [
+        "name",
+        "when"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique label shown in the job log."
+        },
+        "when": {
+          "enum": [
+            "pull_request",
+            "pull_request_review",
+            "workflow_run",
+            "check_suite",
+            "check_run",
+            "issue_comment",
+            "push",
+            "release",
+            "merge_group",
+            "deployment_status"
+          ],
+          "description": "pull_request: Pull request opened, updated, marked ready, converted to draft, closed, …\npull_request_review: Review submitted, edited or dismissed on a pull request.\nworkflow_run: A GitHub Actions workflow finished (CI, deploy, …). Match it with the `workflow` condition.\ncheck_suite: Check suite completed. Third-party CI apps only: GitHub never triggers workflows for checks created by GitHub Actions.\ncheck_run: Single check run completed. Third-party CI apps only, like check_suite.\nissue_comment: Comment created, edited or deleted on an issue or pull request.\npush: Commits pushed to a branch. Issue keys come from the commit messages and branch.\nrelease: Release published, created, edited, …\nmerge_group: Merge queue checks requested, or merge group destroyed.\ndeployment_status: Deployment status reported for a GitHub Environment."
+        },
+        "if": {
+          "type": "object",
+          "description": "Conditions on the GitHub event; all must match."
+        },
+        "ifJiraStatus": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Only when the issue is in this Jira status."
+        },
+        "unlessJiraStatus": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Skip when the issue is in this Jira status."
+        },
+        "transitionTo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Move the issue to this exact Jira status."
+        },
+        "deployToJiraStatus": {
+          "const": true,
+          "description": "workflow_run only: move the issue to the status mapped for the deployed environment (see deploy)."
+        },
+        "comment": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Post this message (id from messages)."
+        },
+        "via": {
+          "description": "transitionTo only: transition names to prefer when several lead to the status.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "onNoTransition": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Message when no transition leads to the status (overrides options.noTransitionMessageId)."
+        },
+        "commentAfterSuccess": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Message posted after a successful transition."
+        },
+        "commentWhenSkipped": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Message posted when the issue is already in the status."
+        },
+        "linkGithub": {
+          "enum": [
+            "pull_request",
+            "workflow_run",
+            "release"
+          ],
+          "description": "Add (or update) a Jira web link to the pull request, workflow run or release."
+        },
+        "fields": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Set Jira fields (id → value template), e.g. customfield_10042: \"{prUrl}\"."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "transitionTo"
+          ]
+        },
+        {
+          "required": [
+            "deployToJiraStatus"
+          ]
+        },
+        {
+          "required": [
+            "comment"
+          ]
+        }
+      ],
+      "dependencies": {
+        "via": [
+          "transitionTo"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "pull_request"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_pull_request"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "pull_request_review"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_pull_request_review"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "workflow_run"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_workflow_run"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "check_suite"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_check_suite"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "check_run"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_check_run"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "issue_comment"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_issue_comment"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "push"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_push"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "release"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_release"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "merge_group"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_merge_group"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "when": {
+                "const": "deployment_status"
+              }
+            },
+            "required": [
+              "when"
+            ]
+          },
+          "then": {
+            "properties": {
+              "if": {
+                "$ref": "#/definitions/if_deployment_status"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "if_pull_request": {
+      "type": "object",
+      "description": "Conditions on the pull_request event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Webhook action, e.g. opened, closed, submitted, published.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "assigned",
+                "auto_merge_disabled",
+                "auto_merge_enabled",
+                "closed",
+                "converted_to_draft",
+                "demilestoned",
+                "dequeued",
+                "edited",
+                "enqueued",
+                "labeled",
+                "locked",
+                "milestoned",
+                "opened",
+                "ready_for_review",
+                "reopened",
+                "review_request_removed",
+                "review_requested",
+                "synchronize",
+                "unassigned",
+                "unlabeled",
+                "unlocked"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "assigned",
+                  "auto_merge_disabled",
+                  "auto_merge_enabled",
+                  "closed",
+                  "converted_to_draft",
+                  "demilestoned",
+                  "dequeued",
+                  "edited",
+                  "enqueued",
+                  "labeled",
+                  "locked",
+                  "milestoned",
+                  "opened",
+                  "ready_for_review",
+                  "reopened",
+                  "review_request_removed",
+                  "review_requested",
+                  "synchronize",
+                  "unassigned",
+                  "unlabeled",
+                  "unlocked"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "prState": {
+          "description": "Pull request state.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "closed"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "merged": {
+          "type": "boolean",
+          "description": "true for merged pull requests (use with action: closed)."
+        },
+        "draft": {
+          "type": "boolean",
+          "description": "false for pull requests ready for review, true for drafts."
+        },
+        "baseRef": {
+          "description": "Target branch, without refs/heads/.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "headRef": {
+          "description": "Source branch (push: the pushed branch), without refs/heads/.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "label": {
+          "description": "The pull request has at least one of these labels.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "notLabel": {
+          "description": "The pull request has none of these labels (e.g. an opt-out label).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "author": {
+          "description": "GitHub login of the pull request author.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    },
+    "if_pull_request_review": {
+      "type": "object",
+      "description": "Conditions on the pull_request_review event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Webhook action, e.g. opened, closed, submitted, published.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "submitted",
+                "edited",
+                "dismissed"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "submitted",
+                  "edited",
+                  "dismissed"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "reviewState": {
+          "description": "Review outcome.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "approved",
+                "changes_requested",
+                "commented",
+                "dismissed"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "approved",
+                  "changes_requested",
+                  "commented",
+                  "dismissed"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "prState": {
+          "description": "Pull request state.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "closed"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "baseRef": {
+          "description": "Target branch, without refs/heads/.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "headRef": {
+          "description": "Source branch (push: the pushed branch), without refs/heads/.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "label": {
+          "description": "The pull request has at least one of these labels.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "notLabel": {
+          "description": "The pull request has none of these labels (e.g. an opt-out label).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "author": {
+          "description": "GitHub login of the pull request author.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    },
+    "if_workflow_run": {
+      "type": "object",
+      "description": "Conditions on the workflow_run event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "workflow": {
+          "description": "Workflow `name:` of the finished run. Also list it under on.workflow_run.workflows in the workflow file.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "runEvent": {
+          "description": "What triggered the run: pull_request, push, workflow_dispatch, schedule, …",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "conclusion": {
+          "description": "Run or check result.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "cancelled",
+                "timed_out",
+                "action_required",
+                "neutral",
+                "skipped",
+                "stale",
+                "startup_failure"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "failure",
+                  "cancelled",
+                  "timed_out",
+                  "action_required",
+                  "neutral",
+                  "skipped",
+                  "stale",
+                  "startup_failure"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    },
+    "if_check_suite": {
+      "type": "object",
+      "description": "Conditions on the check_suite event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Webhook action, e.g. opened, closed, submitted, published.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "completed"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "completed"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "conclusion": {
+          "description": "Run or check result.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "cancelled",
+                "timed_out",
+                "action_required",
+                "neutral",
+                "skipped",
+                "stale",
+                "startup_failure"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "failure",
+                  "cancelled",
+                  "timed_out",
+                  "action_required",
+                  "neutral",
+                  "skipped",
+                  "stale",
+                  "startup_failure"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "checkName": {
+          "description": "Check suite app name or check run name (third-party CI).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    },
+    "if_check_run": {
+      "type": "object",
+      "description": "Conditions on the check_run event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Webhook action, e.g. opened, closed, submitted, published.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "completed"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "completed"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "conclusion": {
+          "description": "Run or check result.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "cancelled",
+                "timed_out",
+                "action_required",
+                "neutral",
+                "skipped",
+                "stale",
+                "startup_failure"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "failure",
+                  "cancelled",
+                  "timed_out",
+                  "action_required",
+                  "neutral",
+                  "skipped",
+                  "stale",
+                  "startup_failure"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "checkName": {
+          "description": "Check suite app name or check run name (third-party CI).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    },
+    "if_issue_comment": {
+      "type": "object",
+      "description": "Conditions on the issue_comment event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Webhook action, e.g. opened, closed, submitted, published.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "created",
+                "edited",
+                "deleted"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "created",
+                  "edited",
+                  "deleted"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "baseRef": {
+          "description": "Target branch, without refs/heads/.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "headRef": {
+          "description": "Source branch (push: the pushed branch), without refs/heads/.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "label": {
+          "description": "The pull request has at least one of these labels.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "notLabel": {
+          "description": "The pull request has none of these labels (e.g. an opt-out label).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    },
+    "if_push": {
+      "type": "object",
+      "description": "Conditions on the push event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "headRef": {
+          "description": "Source branch (push: the pushed branch), without refs/heads/.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    },
+    "if_release": {
+      "type": "object",
+      "description": "Conditions on the release event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Webhook action, e.g. opened, closed, submitted, published.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "published",
+                "unpublished",
+                "created",
+                "edited",
+                "deleted",
+                "prereleased",
+                "released"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "published",
+                  "unpublished",
+                  "created",
+                  "edited",
+                  "deleted",
+                  "prereleased",
+                  "released"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "releaseTag": {
+          "description": "Release tag name, e.g. v1.2.0 (quote numbers).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    },
+    "if_merge_group": {
+      "type": "object",
+      "description": "Conditions on the merge_group event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Webhook action, e.g. opened, closed, submitted, published.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "checks_requested",
+                "destroyed"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "checks_requested",
+                  "destroyed"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "baseRef": {
+          "description": "Target branch, without refs/heads/.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "headRef": {
+          "description": "Source branch (push: the pushed branch), without refs/heads/.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    },
+    "if_deployment_status": {
+      "type": "object",
+      "description": "Conditions on the deployment_status event; all must match.",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Webhook action, e.g. opened, closed, submitted, published.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "created"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "created"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "deploymentEnvironment": {
+          "description": "GitHub Environment name.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "deploymentState": {
+          "description": "Deployment status.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "error",
+                "pending",
+                "inactive",
+                "in_progress",
+                "queued"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "failure",
+                  "error",
+                  "pending",
+                  "inactive",
+                  "in_progress",
+                  "queued"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        }
+      }
+    }
+  }
+}

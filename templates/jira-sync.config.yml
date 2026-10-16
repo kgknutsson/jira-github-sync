@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/kgknutsson/jira-github-sync/v1/jira-sync.config.schema.json
+#
+# Rules for kgknutsson/jira-github-sync. Copy this file to .github/jira-sync.config.yml in your
+# repository, then replace the project key, Jira status/transition names and workflow names.
+# Reference: https://github.com/kgknutsson/jira-github-sync/blob/main/docs/configuration.md
+
+projectKey: PROJ
+
+options:
+  resolveKeyFromCommitMessage: true # deploy/check runs: also read keys from the head commit
+  processAllMatchingIssueKeys: false # true = apply the rule to every key found, not just the first
+  failOnJiraError: true # fail the job on Jira API errors (missing issues are skipped)
+  skipMarker: '[skip-jira]' # skip events whose PR/commit text contains this (keep the quotes)
+
+# Comment templates. Rules refer to them by id; {placeholders} are filled in per event.
+messages:
+  merged: 'Pull request merged to {baseRef}: {url}'
+  prApproved: 'Pull request approved on GitHub: {url}'
+  deploySuccess: 'Deployed to {env} via GitHub Actions: {url}'
+  deploySuccessAlreadyOnStatus: 'Deploy to {env} succeeded (already on {status}): {url}'
+  deployFailed: 'Deploy workflow failed: {url}'
+  qualityGateSuccess: 'Quality Gate passed: {url}'
+  qualityGateFailed: 'Quality Gate failed: {url}'
+  qualityGateFailedNoTransition: 'Quality Gate failed but issue could not move to {targetStatus} from "{currentStatus}": {url}'
+  noTransition: 'GitHub Actions could not move this issue from "{currentStatus}" to "{targetStatus}". Run: {url}'
+  releasePublished: 'GitHub release {releaseTag} published: {url}'
+
+# Used by deployToJiraStatus rules: which Jira status each deploy environment means.
+deploy:
+  jobNameRegex: 'Build and Deploy \((dev|test|prod)\)'
+  branchToEnvironment: { dev: dev, test: test, main: prod }
+  environmentToJiraStatus:
+    dev: Deployed (Dev)
+    test: Deployed (Test)
+    prod: Done
+
+# Checked top to bottom; the first matching rule runs, so keep specific rules above general ones.
+rules:
+  - name: PR ready → In Review
+    when: pull_request
+    if:
+      action: [opened, reopened, ready_for_review, synchronize, edited]
+      prState: open
+      draft: false
+      notLabel: skip-jira
+    transitionTo: In Review
+    via: Start review
+    linkGithub: pull_request
+
+  - name: PR opened as draft → In Progress
+    when: pull_request
+    if: { action: opened, prState: open, draft: true }
+    transitionTo: In Progress
+    via: Rework
+
+  - name: PR draft → In Progress
+    when: pull_request
+    if: { action: converted_to_draft, prState: open }
+    transitionTo: In Progress
+    via: Rework
+
+  - name: PR merged to main → Done
+    when: pull_request
+    if: { action: closed, prState: closed, merged: true, baseRef: main }
+    transitionTo: Done
+    linkGithub: pull_request
+
+  - name: PR merged → comment
+    when: pull_request
+    if: { action: closed, prState: closed, merged: true }
+    comment: merged
+    linkGithub: pull_request
+
+  - name: Changes requested → In Progress
+    when: pull_request_review
+    if: { action: submitted, prState: open, reviewState: changes_requested }
+    transitionTo: In Progress
+    via: Request changes
+
+  - name: PR approved → comment
+    when: pull_request_review
+    if: { action: submitted, prState: open, reviewState: approved }
+    comment: prApproved
+
+  - name: Deploy success → environment status
+    when: workflow_run
+    if: { workflow: Deploy, conclusion: success }
+    deployToJiraStatus: true
+    commentAfterSuccess: deploySuccess
+    commentWhenSkipped: deploySuccessAlreadyOnStatus
+    linkGithub: workflow_run
+
+  - name: Deploy failed → comment
+    when: workflow_run
+    if: { workflow: Deploy, conclusion: [failure, cancelled, timed_out] }
+    comment: deployFailed
+
+  - name: Quality gate failed (in review) → In Progress
+    when: workflow_run
+    if: { workflow: Quality Gate, runEvent: pull_request, conclusion: failure }
+    ifJiraStatus: In Review
+    transitionTo: In Progress
+    via: Rework
+    onNoTransition: qualityGateFailedNoTransition
+    commentAfterSuccess: qualityGateFailed
+
+  - name: Quality gate failed → comment only
+    when: workflow_run
+    if: { workflow: Quality Gate, runEvent: pull_request, conclusion: failure }
+    unlessJiraStatus: In Review
+    comment: qualityGateFailed
+
+  - name: Quality gate success → comment
+    when: workflow_run
+    if: { workflow: Quality Gate, runEvent: pull_request, conclusion: success }
+    comment: qualityGateSuccess
+
+  - name: Release published → comment
+    when: release
+    if: { action: published }
+    comment: releasePublished
+    linkGithub: release

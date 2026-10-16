@@ -126,7 +126,7 @@ export function auditJiraSyncConfig(): JiraSyncAuditViolation[] {
     }
     let groups = 1;
     try {
-      groups = captureGroupCount(deploy.jobNameRegex);
+      if (deploy.jobNameRegex !== undefined) groups = captureGroupCount(deploy.jobNameRegex);
     } catch {
       /* invalid regex is already reported by validateBuiltSyncConfig */
     }
