@@ -63,6 +63,7 @@ const RULE_KEYS = [
   'onNoTransition',
   'commentAfterSuccess',
   'commentWhenSkipped',
+  'commentOnIssue',
   'linkGithub',
   'fields',
 ];
@@ -390,15 +391,22 @@ function readStep(
   }
 
   const extras = readExtras(raw, event, path, label, report);
+  let commentOnIssue: boolean | undefined;
+  if (raw.commentOnIssue !== undefined) {
+    if (typeof raw.commentOnIssue === 'boolean') commentOnIssue = raw.commentOnIssue;
+    else report([...path, 'commentOnIssue'], `${label}: commentOnIssue must be true or false`);
+  }
+
   if (action === 'comment') {
     const messageKey = text('comment');
-    return messageKey ? { kind: 'comment', messageKey, extras } : null;
+    return messageKey ? { kind: 'comment', messageKey, commentOnIssue, extras } : null;
   }
 
   const options = {
     onNoTransition: text('onNoTransition'),
     commentAfterSuccess: text('commentAfterSuccess'),
     commentWhenSkipped: text('commentWhenSkipped'),
+    commentOnIssue,
     extras,
   };
   if (action === 'deployToJiraStatus') {

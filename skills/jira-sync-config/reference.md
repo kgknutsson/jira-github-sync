@@ -17,8 +17,9 @@ Full reference: [docs/configuration.md](https://github.com/kgknutsson/jira-githu
     transitionTo: Done              # exactly one of: transitionTo / deployToJiraStatus: true / comment: <messageId>
     via: [Finish]                   # transitionTo only
     onNoTransition: noTransition    # transitionTo / deploy only
-    commentAfterSuccess: merged     # transitionTo / deploy only
-    commentWhenSkipped: alreadyDone # transitionTo / deploy only
+    commentAfterSuccess: merged     # transitionTo / deploy only (needs commentOnIssue: true)
+    commentWhenSkipped: alreadyDone # transitionTo / deploy only (needs commentOnIssue: true)
+    commentOnIssue: true            # required to post comments on transition/deploy rules
     linkGithub: pull_request        # pull_request | workflow_run | release
     fields: { customfield_10042: '{prUrl}' }
 ```
@@ -54,4 +55,4 @@ Full reference: [docs/configuration.md](https://github.com/kgknutsson/jira-githu
 - [ ] Checkout (`sparse-checkout: .github`) runs before the action
 - [ ] Merged to the default branch (needed for `workflow_run`)
 
-Validate: `npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.4.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml`
+Validate: `npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.5.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml`

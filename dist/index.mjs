@@ -7600,7 +7600,25 @@ async function transitionIssueToStatus(config, issueKey, targetStatus, preferred
     transitionName: chosen.name
   };
 }
+async function issueHasRemoteLink(config, issueKey, url) {
+  const res = await jiraFetch(
+    config,
+    `/rest/api/3/issue/${encodeURIComponent(issueKey)}/remotelink`
+  );
+  if (!res.ok) {
+    if (res.status === 404) throw new JiraIssueNotFoundError(issueKey);
+    return false;
+  }
+  const data = await res.json();
+  if (!Array.isArray(data)) return false;
+  return data.some(
+    (item) => item.globalId === url || item.object?.url === url
+  );
+}
 async function addIssueRemoteLink(config, issueKey, url, title) {
+  if (await issueHasRemoteLink(config, issueKey, url)) {
+    return;
+  }
   const res = await jiraFetch(config, `/rest/api/3/issue/${encodeURIComponent(issueKey)}/remotelink`, {
     method: "POST",
     body: JSON.stringify({
@@ -8095,6 +8113,13 @@ function validateBuiltSyncConfig(built) {
         });
       }
     }
+    if (rule.then.kind !== "comment" && rule.then.commentOnIssue !== true && messageReferences(rule.then).length > 0) {
+      issues.push({
+        level: "warning",
+        message: `Rule "${rule.name}" has comment message fields but commentOnIssue is not true; no comment will be posted`,
+        path: ["rules", index, "commentOnIssue"]
+      });
+    }
     for (const [fieldId, template] of Object.entries(rule.then.extras?.fields ?? {})) {
       for (const name of unknownPlaceholders(template)) {
         issues.push({
@@ -8212,6 +8237,7 @@ var RULE_KEYS = [
   "onNoTransition",
   "commentAfterSuccess",
   "commentWhenSkipped",
+  "commentOnIssue",
   "linkGithub",
   "fields"
 ];
@@ -8487,14 +8513,20 @@ function readStep(raw, event, path, label, report) {
     onlyWith(key, ["transitionTo", "deployToJiraStatus"]);
   }
   const extras = readExtras(raw, event, path, label, report);
+  let commentOnIssue;
+  if (raw.commentOnIssue !== void 0) {
+    if (typeof raw.commentOnIssue === "boolean") commentOnIssue = raw.commentOnIssue;
+    else report([...path, "commentOnIssue"], `${label}: commentOnIssue must be true or false`);
+  }
   if (action === "comment") {
     const messageKey = text("comment");
-    return messageKey ? { kind: "comment", messageKey, extras } : null;
+    return messageKey ? { kind: "comment", messageKey, commentOnIssue, extras } : null;
   }
   const options = {
     onNoTransition: text("onNoTransition"),
     commentAfterSuccess: text("commentAfterSuccess"),
     commentWhenSkipped: text("commentWhenSkipped"),
+    commentOnIssue,
     extras
   };
   if (action === "deployToJiraStatus") {
@@ -9011,6 +9043,22 @@ var log = {
   }
 };
 
+// lib/actions/ruleComments.ts
+function ruleAllowsComments(step) {
+  if (step.kind === "comment") return step.commentOnIssue !== false;
+  return step.commentOnIssue === true;
+}
+
+// lib/actions/postIssueComment.ts
+async function postIssueComment(ctx, step, text, messageKey) {
+  if (!ruleAllowsComments(step)) {
+    log.info(`commentOnIssue not enabled; skipping comment (${messageKey}) on ${ctx.issueKey}`);
+    return false;
+  }
+  await addIssueComment(ctx.jira, ctx.issueKey, text);
+  return true;
+}
+
 // lib/actions/jiraSideEffects.ts
 function linkUrl(ctx, kind) {
   const ev = ctx.event;
@@ -9052,9 +9100,10 @@ async function runJiraSideEffects(extras, ctx) {
 async function runCommentAction(step, ctx) {
   const vars = actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus);
   const text = formatMessage(ctx.compiled.messageTemplate(step.messageKey), vars);
-  await addIssueComment(ctx.jira, ctx.issueKey, text);
+  if (await postIssueComment(ctx, step, text, step.messageKey)) {
+    log.info(`Comment (${step.messageKey}) on ${ctx.issueKey}`);
+  }
   await runJiraSideEffects(step.extras, ctx);
-  log.info(`Comment (${step.messageKey}) on ${ctx.issueKey}`);
 }
 
 // lib/utils/deployEnvironment.ts
@@ -9075,12 +9124,12 @@ function parseDeployEnvironment(jobs, headBranch, jobNamePattern, branchToEnv, v
 }
 
 // lib/actions/deployAction.ts
-async function commentWithKey(ctx, messageKey, extra) {
+async function commentWithKey(step, ctx, messageKey, extra) {
   const text = formatMessage(ctx.compiled.messageTemplate(messageKey), {
     ...actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus),
     ...extra
   });
-  await addIssueComment(ctx.jira, ctx.issueKey, text);
+  await postIssueComment(ctx, step, text, messageKey);
 }
 async function runDeployAction(step, ctx) {
   if (ctx.event.event !== "workflow_run") {
@@ -9124,7 +9173,7 @@ async function runDeployAction(step, ctx) {
   if (!result.ok && result.reason === "no_transition") {
     const messageId = step.onNoTransition ?? ctx.compiled.options.noTransitionMessageId;
     if (messageId) {
-      await commentWithKey(ctx, messageId, {
+      await commentWithKey(step, ctx, messageId, {
         ...vars,
         currentStatus: result.from,
         targetStatus: result.target
@@ -9134,14 +9183,14 @@ async function runDeployAction(step, ctx) {
   }
   if (result.ok && "skipped" in result && result.skipped) {
     if (step.commentWhenSkipped) {
-      await commentWithKey(ctx, step.commentWhenSkipped, vars);
+      await commentWithKey(step, ctx, step.commentWhenSkipped, vars);
     }
     log.info(`${ctx.issueKey}: deploy ${deployEnv} (already ${target})`);
     return "skipped";
   }
   if (result.ok && !("skipped" in result)) {
     if (step.commentAfterSuccess) {
-      await commentWithKey(ctx, step.commentAfterSuccess, vars);
+      await commentWithKey(step, ctx, step.commentAfterSuccess, vars);
     }
     await runJiraSideEffects(step.extras, ctx);
     log.info(`${ctx.issueKey}: deploy ${deployEnv} \u2192 ${target}`);
@@ -9175,19 +9224,19 @@ async function resolveIssueKeysForWorkflowRun(headSha, headBranch, extractAll, o
 }
 
 // lib/actions/transitionAction.ts
-async function commentWithKey2(ctx, messageKey, extra) {
+async function commentWithKey2(step, ctx, messageKey, extra) {
   const text = formatMessage(ctx.compiled.messageTemplate(messageKey), {
     ...actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus),
     ...extra
   });
-  await addIssueComment(ctx.jira, ctx.issueKey, text);
+  await postIssueComment(ctx, step, text, messageKey);
 }
 async function runTransitionAction(step, ctx) {
   const result = await transitionIssueToStatus(ctx.jira, ctx.issueKey, step.status, step.via ?? []);
   if (!result.ok && result.reason === "no_transition") {
     const messageId = step.onNoTransition ?? ctx.compiled.options.noTransitionMessageId;
     if (messageId) {
-      await commentWithKey2(ctx, messageId, {
+      await commentWithKey2(step, ctx, messageId, {
         currentStatus: result.from,
         targetStatus: result.target
       });
@@ -9197,7 +9246,7 @@ async function runTransitionAction(step, ctx) {
   }
   if (result.ok && "skipped" in result && result.skipped) {
     if (step.commentWhenSkipped) {
-      await commentWithKey2(ctx, step.commentWhenSkipped, {
+      await commentWithKey2(step, ctx, step.commentWhenSkipped, {
         status: step.status,
         targetStatus: step.status
       });
@@ -9206,7 +9255,7 @@ async function runTransitionAction(step, ctx) {
   }
   if (result.ok && !("skipped" in result)) {
     if (step.commentAfterSuccess) {
-      await commentWithKey2(ctx, step.commentAfterSuccess, {
+      await commentWithKey2(step, ctx, step.commentAfterSuccess, {
         status: result.to,
         targetStatus: result.to
       });

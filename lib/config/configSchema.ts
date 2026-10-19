@@ -150,6 +150,11 @@ export function buildConfigSchema(): Schema {
           onNoTransition: messageId('Message when no transition leads to the status (overrides options.noTransitionMessageId).'),
           commentAfterSuccess: messageId('Message posted after a successful transition.'),
           commentWhenSkipped: messageId('Message posted when the issue is already in the status.'),
+          commentOnIssue: {
+            type: 'boolean',
+            description:
+              'Set true on transition/deploy rules to post commentAfterSuccess, commentWhenSkipped, or onNoTransition. Comment-only rules post by default; set false to skip.',
+          },
           linkGithub: {
             enum: Object.keys(LINK_KINDS),
             description: 'Add (or update) a Jira web link to the pull request, workflow run or release.',

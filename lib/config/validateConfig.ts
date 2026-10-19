@@ -65,6 +65,17 @@ export function validateBuiltSyncConfig(built: BuiltSyncConfig): ConfigValidatio
         });
       }
     }
+    if (
+      rule.then.kind !== 'comment' &&
+      rule.then.commentOnIssue !== true &&
+      messageReferences(rule.then).length > 0
+    ) {
+      issues.push({
+        level: 'warning',
+        message: `Rule "${rule.name}" has comment message fields but commentOnIssue is not true; no comment will be posted`,
+        path: ['rules', index, 'commentOnIssue'],
+      });
+    }
     for (const [fieldId, template] of Object.entries(rule.then.extras?.fields ?? {})) {
       for (const name of unknownPlaceholders(template)) {
         issues.push({

@@ -67,6 +67,7 @@ describe('transition comments', () => {
       '    when: check_suite',
       '    if: { conclusion: failure }',
       '    transitionTo: In Progress',
+      '    commentOnIssue: true',
       '    commentAfterSuccess: failed'
     );
     const event: CheckSuiteContext = {
@@ -102,14 +103,102 @@ describe('transition comments', () => {
   });
 });
 
+describe('commentOnIssue', () => {
+  it('skips comment-only rules when commentOnIssue is false', async () => {
+    const compiled = compileYaml(
+      'projectKey: PROJ',
+      "messages: { merged: 'Merged: {url}' }",
+      'rules:',
+      '  - name: Comment rule',
+      '    when: release',
+      '    if: { action: published }',
+      '    comment: merged',
+      '    commentOnIssue: false'
+    );
+    const calls = stubFetch({ [`POST ${JIRA}/rest/api/3/issue/PROJ-1/comment`]: {} });
+    const step = compiled.built.rules[0]!.then;
+    if (step.kind !== 'comment') throw new Error('expected comment step');
+    const { runCommentAction } = await import('../lib/actions/commentAction');
+    await runCommentAction(step, {
+      jira,
+      compiled,
+      issueKey: 'PROJ-1',
+      jiraStatus: 'In Review',
+      event: {
+        event: 'release',
+        action: 'published',
+        tagName: 'v1',
+        releaseName: 'v1',
+        releaseUrl: 'https://github.com/org/repo/releases/tag/v1',
+        repository: 'org/repo',
+      },
+    });
+    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/comment'))).toBe(false);
+  });
+
+  it('skips transition commentAfterSuccess without commentOnIssue', async () => {
+    const compiled = compileYaml(
+      'projectKey: PROJ',
+      "messages: { note: 'Moved: {url}' }",
+      'rules:',
+      '  - name: Move',
+      '    when: release',
+      '    if: { action: published }',
+      '    transitionTo: Done',
+      '    commentAfterSuccess: note'
+    );
+    const calls = stubFetch({
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-1?fields=status`]: { fields: { status: { name: 'In Review' } } },
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-1/transitions`]: {
+        transitions: [{ id: '1', name: 'Done', to: { name: 'Done' } }],
+      },
+      [`POST ${JIRA}/rest/api/3/issue/PROJ-1/transitions`]: {},
+      [`POST ${JIRA}/rest/api/3/issue/PROJ-1/comment`]: {},
+    });
+    const step = compiled.built.rules[0]!.then as TransitionStep;
+    await runTransitionAction(step, {
+      jira,
+      compiled,
+      issueKey: 'PROJ-1',
+      jiraStatus: 'In Review',
+      event: {
+        event: 'release',
+        action: 'published',
+        tagName: 'v1',
+        releaseName: 'v1',
+        releaseUrl: 'https://github.com/org/repo/releases/tag/v1',
+        repository: 'org/repo',
+      },
+    });
+    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/comment'))).toBe(false);
+  });
+});
+
 describe('remote links', () => {
-  it('send the URL as globalId so repeated runs update instead of duplicating', async () => {
+  it('send the URL as globalId on first link', async () => {
     const url = 'https://github.com/org/repo/pull/1';
-    const calls = stubFetch({ [`POST ${JIRA}/rest/api/3/issue/PROJ-1/remotelink`]: { id: 1 } });
+    const calls = stubFetch({
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-1/remotelink`]: [],
+      [`POST ${JIRA}/rest/api/3/issue/PROJ-1/remotelink`]: { id: 1 },
+    });
 
     await addIssueRemoteLink(jira, 'PROJ-1', url, 'GitHub pull request');
 
-    expect(calls[0]?.body).toEqual({ globalId: url, object: { url, title: 'GitHub pull request' } });
+    expect(calls.find((c) => c.method === 'POST')?.body).toEqual({
+      globalId: url,
+      object: { url, title: 'GitHub pull request' },
+    });
+  });
+
+  it('skip POST when the URL is already linked', async () => {
+    const url = 'https://github.com/org/repo/pull/1';
+    const calls = stubFetch({
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-1/remotelink`]: [{ globalId: url, object: { url, title: 'GitHub pull request' } }],
+    });
+
+    await addIssueRemoteLink(jira, 'PROJ-1', url, 'GitHub pull request');
+
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 });
 

@@ -315,9 +315,35 @@ export async function transitionIssueToStatus(
   };
 }
 
+type RemoteLinkItem = {
+  globalId?: string;
+  object?: { url?: string; title?: string };
+};
+
+/** Returns true when the issue already has a remote link for this URL (same globalId or object.url). */
+export async function issueHasRemoteLink(
+  config: JiraConfig,
+  issueKey: string,
+  url: string
+): Promise<boolean> {
+  const res = await jiraFetch(
+    config,
+    `/rest/api/3/issue/${encodeURIComponent(issueKey)}/remotelink`
+  );
+  if (!res.ok) {
+    if (res.status === 404) throw new JiraIssueNotFoundError(issueKey);
+    return false;
+  }
+  const data = (await res.json()) as RemoteLinkItem[];
+  if (!Array.isArray(data)) return false;
+  return data.some(
+    (item) => item.globalId === url || item.object?.url === url
+  );
+}
+
 /**
- * Adds a remote (web) link, e.g. the GitHub PR, to the issue. Uses the URL as `globalId`, so
- * Jira updates an existing link instead of creating a duplicate on repeated runs.
+ * Adds a remote (web) link, e.g. the GitHub PR, to the issue. Skips the API call when the URL is
+ * already linked so Jira does not emit a noisy "RemoteWorkItemLink updated" activity on every sync.
  */
 export async function addIssueRemoteLink(
   config: JiraConfig,
@@ -325,6 +351,10 @@ export async function addIssueRemoteLink(
   url: string,
   title: string
 ): Promise<void> {
+  if (await issueHasRemoteLink(config, issueKey, url)) {
+    return;
+  }
+  // POST only when missing — repeated POSTs with globalId still show as activity in Jira.
   const res = await jiraFetch(config, `/rest/api/3/issue/${encodeURIComponent(issueKey)}/remotelink`, {
     method: 'POST',
     body: JSON.stringify({

@@ -178,6 +178,10 @@
           "minLength": 1,
           "description": "Message posted when the issue is already in the status."
         },
+        "commentOnIssue": {
+          "type": "boolean",
+          "description": "Set true on transition/deploy rules to post commentAfterSuccess, commentWhenSkipped, or onNoTransition. Comment-only rules post by default; set false to skip."
+        },
         "linkGithub": {
           "enum": [
             "pull_request",

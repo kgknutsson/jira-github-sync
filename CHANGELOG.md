@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.5 — 2026-10-19
+
+### Added
+
+- Per-rule `commentOnIssue`: transition/deploy rules comment only when `commentOnIssue: true`; `comment:` rules post by default (`commentOnIssue: false` skips).
+
+### Fixed
+
+- Remote links: skip the Jira API when the issue already has the same URL. Repeated `POST` remotelink calls (even with `globalId`) still appear as **RemoteWorkItemLink updated** in the activity feed and clutter tickets.
+
 ## 1.0.4 — 2026-10-16
 
 ### Fixed

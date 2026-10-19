@@ -51,10 +51,13 @@ describe('rules file', () => {
     });
     expect(config.rules.find((r) => r.name.startsWith('Quality gate failed (in review)'))).toMatchObject({
       when: { workflow: 'Quality Gate', runEvent: 'pull_request', conclusion: 'failure', jiraStatusIs: 'In Review' },
-      then: { onNoTransition: 'qualityGateFailedNoTransition', commentAfterSuccess: 'qualityGateFailed' },
+      then: {
+        commentOnIssue: true,
+        onNoTransition: 'qualityGateFailedNoTransition',
+        commentAfterSuccess: 'qualityGateFailed',
+      },
     });
     expect(config.rules.find((r) => r.then.kind === 'deploy')?.then).toMatchObject({
-      commentAfterSuccess: 'deploySuccess',
       extras: { linkGithub: 'workflow_run' },
     });
     expect(config.deploy).toEqual({

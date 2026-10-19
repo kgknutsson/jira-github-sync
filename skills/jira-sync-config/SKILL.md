@@ -57,6 +57,7 @@ rules:
 Quality bar:
 
 - Every message id used by `comment`, `commentAfterSuccess`, `commentWhenSkipped` or `onNoTransition` exists under `messages`.
+- Per rule: `commentOnIssue: true` on transition/deploy rules to post comments; `comment:` rules post by default.
 - PR transition rules require `prState: open` (or `merged: true`); review rules require `prState: open`.
 - CI rules on PRs use `runEvent: pull_request` so push-triggered runs are ignored.
 - Deploy failure comments list `conclusion: [failure, cancelled, timed_out]`.
@@ -77,7 +78,7 @@ Start from [templates/jira-sync.workflow.yml](https://github.com/kgknutsson/jira
 ### 5. Validate
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.4.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.5.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
 
 Add `--preflight` (with `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN` set) to confirm every status exists in Jira. Fix all errors and warnings.

@@ -1,6 +1,6 @@
 {
   "name": "@kgk/jira-github-sync",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "description": "GitHub Action that moves Jira issues and posts comments from GitHub events, driven by a YAML rules file",
   "type": "module",

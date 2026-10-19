@@ -31,6 +31,15 @@ export type DeployMeta = {
 /** Which GitHub URL `linkGithub` attaches as a Jira remote link. */
 export type GithubLinkKind = 'pull_request' | 'workflow_run' | 'release';
 
+/** Per-rule comment toggle (see {@link ruleAllowsComments} in actions/ruleComments.ts). */
+export type RuleCommentToggle = {
+  /**
+   * Transition/deploy: must be `true` to post `commentAfterSuccess`, `commentWhenSkipped`, or
+   * `onNoTransition`. Comment-only rules (`comment:`) post by default; set `false` to no-op.
+   */
+  commentOnIssue?: boolean;
+};
+
 /** Side effects after a step succeeds (`linkGithub` / `fields` on a rule). */
 export type JiraStepExtras = {
   /** Add (or update) a Jira remote link to the PR, workflow run or release. */
@@ -40,7 +49,7 @@ export type JiraStepExtras = {
 };
 
 /** Rule action: move the issue to a named Jira status. */
-export type TransitionStep = {
+export type TransitionStep = RuleCommentToggle & {
   kind: 'transition';
   status: string;
   /** Transition names to prefer when several lead to `status`. */
@@ -53,7 +62,7 @@ export type TransitionStep = {
 };
 
 /** Rule action: infer the deploy environment from the workflow run and move the issue. */
-export type DeployTransitionStep = {
+export type DeployTransitionStep = RuleCommentToggle & {
   kind: 'deploy';
   onNoTransition?: string;
   commentAfterSuccess?: string;
@@ -62,7 +71,7 @@ export type DeployTransitionStep = {
 };
 
 /** Rule action: post a templated comment only. */
-export type CommentStep = {
+export type CommentStep = RuleCommentToggle & {
   kind: 'comment';
   /** Message template id from `messages`. */
   messageKey: string;

@@ -3,11 +3,11 @@
  *
  * @module actions/commentAction
  */
-import { addIssueComment } from '../adapters/jira/client';
 import { formatMessage } from '../utils/formatMessage';
 import { actionTemplateVars } from '../utils/actionTemplateVars';
 import { log } from '../utils/logger';
 import type { CommentStep } from '../config/types';
+import { postIssueComment } from './postIssueComment';
 import { runJiraSideEffects } from './jiraSideEffects';
 import type { ActionContext } from './types';
 
@@ -15,7 +15,8 @@ import type { ActionContext } from './types';
 export async function runCommentAction(step: CommentStep, ctx: ActionContext): Promise<void> {
   const vars = actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus);
   const text = formatMessage(ctx.compiled.messageTemplate(step.messageKey), vars);
-  await addIssueComment(ctx.jira, ctx.issueKey, text);
+  if (await postIssueComment(ctx, step, text, step.messageKey)) {
+    log.info(`Comment (${step.messageKey}) on ${ctx.issueKey}`);
+  }
   await runJiraSideEffects(step.extras, ctx);
-  log.info(`Comment (${step.messageKey}) on ${ctx.issueKey}`);
 }

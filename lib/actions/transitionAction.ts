@@ -3,15 +3,17 @@
  *
  * @module actions/transitionAction
  */
-import { addIssueComment, transitionIssueToStatus } from '../adapters/jira/client';
+import { transitionIssueToStatus } from '../adapters/jira/client';
 import { actionTemplateVars } from '../utils/actionTemplateVars';
 import { formatMessage } from '../utils/formatMessage';
 import { log } from '../utils/logger';
 import type { TransitionStep } from '../config/types';
+import { postIssueComment } from './postIssueComment';
 import { runJiraSideEffects } from './jiraSideEffects';
 import type { ActionContext, ActionResult } from './types';
 
 async function commentWithKey(
+  step: TransitionStep,
   ctx: ActionContext,
   messageKey: string,
   extra: Record<string, string>
@@ -20,7 +22,7 @@ async function commentWithKey(
     ...actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus),
     ...extra,
   });
-  await addIssueComment(ctx.jira, ctx.issueKey, text);
+  await postIssueComment(ctx, step, text, messageKey);
 }
 
 /** Applies a fixed Jira status transition with optional side-effect comments. */
@@ -33,7 +35,7 @@ export async function runTransitionAction(
   if (!result.ok && result.reason === 'no_transition') {
     const messageId = step.onNoTransition ?? ctx.compiled.options.noTransitionMessageId;
     if (messageId) {
-      await commentWithKey(ctx, messageId, {
+      await commentWithKey(step, ctx, messageId, {
         currentStatus: result.from,
         targetStatus: result.target,
       });
@@ -44,7 +46,7 @@ export async function runTransitionAction(
 
   if (result.ok && 'skipped' in result && result.skipped) {
     if (step.commentWhenSkipped) {
-      await commentWithKey(ctx, step.commentWhenSkipped, {
+      await commentWithKey(step, ctx, step.commentWhenSkipped, {
         status: step.status,
         targetStatus: step.status,
       });
@@ -54,7 +56,7 @@ export async function runTransitionAction(
 
   if (result.ok && !('skipped' in result)) {
     if (step.commentAfterSuccess) {
-      await commentWithKey(ctx, step.commentAfterSuccess, {
+      await commentWithKey(step, ctx, step.commentAfterSuccess, {
         status: result.to,
         targetStatus: result.to,
       });

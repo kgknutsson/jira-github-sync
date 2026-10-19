@@ -3,7 +3,7 @@
  *
  * @module actions/deployAction
  */
-import { addIssueComment, transitionIssueToStatus } from '../adapters/jira/client';
+import { transitionIssueToStatus } from '../adapters/jira/client';
 import {
   findPullRequestsForCommit,
   getCommitMessage,
@@ -15,10 +15,12 @@ import { parseDeployEnvironment } from '../utils/deployEnvironment';
 import { formatMessage } from '../utils/formatMessage';
 import { log } from '../utils/logger';
 import type { DeployTransitionStep } from '../config/types';
+import { postIssueComment } from './postIssueComment';
 import { runJiraSideEffects } from './jiraSideEffects';
 import type { ActionContext, ActionResult } from './types';
 
 async function commentWithKey(
+  step: DeployTransitionStep,
   ctx: ActionContext,
   messageKey: string,
   extra: Record<string, string>
@@ -27,7 +29,7 @@ async function commentWithKey(
     ...actionTemplateVars(ctx.event, ctx.issueKey, ctx.jiraStatus),
     ...extra,
   });
-  await addIssueComment(ctx.jira, ctx.issueKey, text);
+  await postIssueComment(ctx, step, text, messageKey);
 }
 
 /** Maps deploy workflow conclusion to the correct Jira deploy column. */
@@ -81,7 +83,7 @@ export async function runDeployAction(
   if (!result.ok && result.reason === 'no_transition') {
     const messageId = step.onNoTransition ?? ctx.compiled.options.noTransitionMessageId;
     if (messageId) {
-      await commentWithKey(ctx, messageId, {
+      await commentWithKey(step, ctx, messageId, {
         ...vars,
         currentStatus: result.from,
         targetStatus: result.target,
@@ -92,7 +94,7 @@ export async function runDeployAction(
 
   if (result.ok && 'skipped' in result && result.skipped) {
     if (step.commentWhenSkipped) {
-      await commentWithKey(ctx, step.commentWhenSkipped, vars);
+      await commentWithKey(step, ctx, step.commentWhenSkipped, vars);
     }
     log.info(`${ctx.issueKey}: deploy ${deployEnv} (already ${target})`);
     return 'skipped';
@@ -100,7 +102,7 @@ export async function runDeployAction(
 
   if (result.ok && !('skipped' in result)) {
     if (step.commentAfterSuccess) {
-      await commentWithKey(ctx, step.commentAfterSuccess, vars);
+      await commentWithKey(step, ctx, step.commentAfterSuccess, vars);
     }
     await runJiraSideEffects(step.extras, ctx);
     log.info(`${ctx.issueKey}: deploy ${deployEnv} → ${target}`);

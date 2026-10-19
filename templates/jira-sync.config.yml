@@ -16,8 +16,6 @@ options:
 messages:
   merged: 'Pull request merged to {baseRef}: {url}'
   prApproved: 'Pull request approved on GitHub: {url}'
-  deploySuccess: 'Deployed to {env} via GitHub Actions: {url}'
-  deploySuccessAlreadyOnStatus: 'Deploy to {env} succeeded (already on {status}): {url}'
   deployFailed: 'Deploy workflow failed: {url}'
   qualityGateSuccess: 'Quality Gate passed: {url}'
   qualityGateFailed: 'Quality Gate failed: {url}'
@@ -86,8 +84,6 @@ rules:
     when: workflow_run
     if: { workflow: Deploy, conclusion: success }
     deployToJiraStatus: true
-    commentAfterSuccess: deploySuccess
-    commentWhenSkipped: deploySuccessAlreadyOnStatus
     linkGithub: workflow_run
 
   - name: Deploy failed → comment
@@ -101,6 +97,7 @@ rules:
     ifJiraStatus: In Review
     transitionTo: In Progress
     via: Rework
+    commentOnIssue: true
     onNoTransition: qualityGateFailedNoTransition
     commentAfterSuccess: qualityGateFailed
 

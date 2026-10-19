@@ -30,7 +30,35 @@ Every run validates the file and fails with an annotation on the offending line 
 | `processAllMatchingIssueKeys` | `false` | Apply the matched rule to every issue key found, not just the first |
 | `failOnJiraError` | `true` | Fail the job on Jira API errors (issues that do not exist are always skipped) |
 | `skipMarker` | `'[skip-jira]'` | Skip events whose PR, commit or comment text contains this (case-insensitive); `null` disables. Keep the quotes: unquoted `[skip-jira]` is a YAML list |
-| `noTransitionMessageId` | `noTransition` if that message exists | Message posted when Jira has no transition to a rule's target status; `null` posts nothing |
+| `noTransitionMessageId` | `noTransition` if that message exists | Message posted when Jira has no transition to a rule's target status; `null` posts nothing (only if the rule has `commentOnIssue: true`) |
+
+## Per-rule comments (`commentOnIssue`)
+
+Comments are **opt-in per rule**, not global:
+
+| Rule type | Default | To comment |
+| --------- | ------- | ---------- |
+| `comment:` only | Posts the message | Omit `commentOnIssue`, or set `commentOnIssue: false` to skip |
+| `transitionTo` / `deployToJiraStatus` | **Silent** (status only) | Set `commentOnIssue: true` and use `commentAfterSuccess`, `commentWhenSkipped`, or `onNoTransition` |
+
+```yaml
+  - name: Deploy failed → comment
+    when: workflow_run
+    if: { workflow: Deploy, conclusion: failure }
+    comment: deployFailed
+
+  - name: Deploy success → status only
+    when: workflow_run
+    if: { workflow: Deploy, conclusion: success }
+    deployToJiraStatus: true
+
+  - name: Quality gate failed
+    when: workflow_run
+    if: { workflow: Quality Gate, conclusion: failure }
+    transitionTo: In Progress
+    commentOnIssue: true
+    commentAfterSuccess: qualityGateFailed
+```
 
 ## `messages`
 
@@ -304,6 +332,6 @@ Before syncing, the action compares the workflow file that runs it with your rul
 It also fails when a `deployToJiraStatus` rule has no usable `deploy` map. Run it with `validate-only: true`, or locally:
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.4.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.5.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 # add --preflight with JIRA_BASE_URL, JIRA_USER_EMAIL and JIRA_API_TOKEN set to check status names in Jira
 ```

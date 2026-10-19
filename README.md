@@ -70,7 +70,7 @@ rules:
 Check everything locally before pushing, with the release your workflow runs:
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.4.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.5.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
 
 ## Docs
