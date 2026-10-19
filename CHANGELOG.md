@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.6 — 2026-10-19
+
+### Fixed
+
+- CI: run Vitest test files serially so `dist.test` and `action-e2e` do not race on `node build.mjs` (intermittent empty output on Node 20).
+
 ## 1.0.5 — 2026-10-19
 
 ### Added
