@@ -55,7 +55,7 @@ describe('resolveIssueKeysForWorkflowRun', () => {
       return [...text.matchAll(pattern)].map((m) => m[0]!.toUpperCase());
     };
 
-    const keys = await resolveIssueKeysForWorkflowRun('aaa', 'test', extractAll, {
+    const keys = await resolveIssueKeysForWorkflowRun('aaa', 'test', 'org/repo', extractAll, {
       resolveKeyFromCommitMessage: true,
       resolveKeysFromRecentCommits: 10,
       allowRecentCommitScan: true,
@@ -66,6 +66,7 @@ describe('resolveIssueKeysForWorkflowRun', () => {
   });
 
   it('continues when listing pull requests for a commit returns 500', async () => {
+    let pullsCalls = 0;
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/commits?sha=only')) {
@@ -74,6 +75,8 @@ describe('resolveIssueKeysForWorkflowRun', () => {
         });
       }
       if (url.endsWith('/commits/only/pulls')) {
+        pullsCalls += 1;
+        if (pullsCalls === 1) return new Response(JSON.stringify([]), { status: 200 });
         return new Response('error', { status: 500 });
       }
       return new Response('not found', { status: 404 });
@@ -84,7 +87,7 @@ describe('resolveIssueKeysForWorkflowRun', () => {
     const extractAll = (parts: { commitMessage?: string | null }) =>
       [...(parts.commitMessage ?? '').matchAll(pattern)].map((m) => m[0]!.toUpperCase());
 
-    const keys = await resolveIssueKeysForWorkflowRun('only', 'staging', extractAll, {
+    const keys = await resolveIssueKeysForWorkflowRun('only', 'staging', 'org/repo', extractAll, {
       resolveKeyFromCommitMessage: true,
       resolveKeysFromRecentCommits: 5,
       allowRecentCommitScan: true,
@@ -128,7 +131,7 @@ describe('resolveIssueKeysForWorkflowRun', () => {
       return [...text.matchAll(pattern)].map((m) => m[0]!.toUpperCase());
     };
 
-    const keys = await resolveIssueKeysForWorkflowRun('mix', 'test', extractAll, {
+    const keys = await resolveIssueKeysForWorkflowRun('mix', 'test', 'org/repo', extractAll, {
       resolveKeyFromCommitMessage: true,
       resolveKeysFromRecentCommits: 5,
       allowRecentCommitScan: true,
@@ -173,7 +176,7 @@ describe('resolveIssueKeysForWorkflowRun', () => {
         (m) => m[0]!.toUpperCase()
       );
 
-    const keys = await resolveIssueKeysForWorkflowRun('skippr', 'test', extractAll, {
+    const keys = await resolveIssueKeysForWorkflowRun('skippr', 'test', 'org/repo', extractAll, {
       resolveKeyFromCommitMessage: true,
       resolveKeysFromRecentCommits: 5,
       allowRecentCommitScan: true,
@@ -189,6 +192,9 @@ describe('resolveIssueKeysForWorkflowRun', () => {
       if (url.includes('/commits?sha=head')) {
         return new Response('error', { status: 500 });
       }
+      if (url.endsWith('/commits/pay1/pulls') || url.endsWith('/commits/pay2/pulls')) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -201,6 +207,8 @@ describe('resolveIssueKeysForWorkflowRun', () => {
       'head',
       'test',
       ['KCM-3 from payload', 'chore: no key'],
+      [{ sha: 'pay1', message: 'KCM-3 from payload' }, { sha: 'pay2', message: 'chore: no key' }],
+      'org/repo',
       extractAll,
       {
         resolveKeyFromCommitMessage: true,
@@ -219,6 +227,9 @@ describe('resolveIssueKeysForWorkflowRun', () => {
       if (url.includes('/commits?sha=head')) {
         return new Response('error', { status: 500 });
       }
+      if (url.endsWith('/commits/pay1/pulls')) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -233,6 +244,8 @@ describe('resolveIssueKeysForWorkflowRun', () => {
       'head',
       'PROJ-999-test',
       ['PROJ-1 fix'],
+      [{ sha: 'pay1', message: 'PROJ-1 fix' }],
+      'org/repo',
       extractAll,
       {
         resolveKeyFromCommitMessage: true,
@@ -243,6 +256,142 @@ describe('resolveIssueKeysForWorkflowRun', () => {
     );
 
     expect(keys).toEqual(['PROJ-1']);
+  });
+
+  it('ignores payload commit message keys when linked PR has skip marker (list failed)', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=head')) {
+        return new Response('error', { status: 500 });
+      }
+      if (url.endsWith('/commits/pay1/pulls')) {
+        return new Response(
+          JSON.stringify([
+            {
+              title: 'Feature',
+              body: '[skip-jira]',
+              html_url: 'https://github.com/org/repo/pull/1',
+              merged_at: '2026-01-01T00:00:00Z',
+              state: 'closed',
+              head: { ref: 'feature', repo: { full_name: 'org/repo' } },
+              base: { ref: 'dev' },
+            },
+          ]),
+          { status: 200 }
+        );
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /PROJ-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null; body?: string | null }) =>
+      [...[parts.commitMessage, parts.body].filter(Boolean).join('\n').matchAll(pattern)].map(
+        (m) => m[0]!.toUpperCase()
+      );
+
+    const keys = await resolveIssueKeysForPush(
+      'head',
+      'test',
+      ['PROJ-9 fix'],
+      [{ sha: 'pay1', message: 'PROJ-9 fix' }],
+      'org/repo',
+      extractAll,
+      {
+        resolveKeyFromCommitMessage: true,
+        resolveKeysFromRecentCommits: 10,
+        allowRecentCommitScan: true,
+        skipMarker: '[skip-jira]',
+      }
+    );
+
+    expect(keys).toEqual([]);
+  });
+
+  it('skips keys from fork-linked commits during recent-commit scan', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=aaa')) {
+        return new Response(
+          JSON.stringify([
+            { sha: 'aaa', commit: { message: 'Merge' } },
+            { sha: 'forkc', commit: { message: 'KCM-99 fork' } },
+            { sha: 'good', commit: { message: 'KCM-1 ok' } },
+          ]),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith('/commits/aaa/pulls')) return new Response(JSON.stringify([]), { status: 200 });
+      if (url.endsWith('/commits/forkc/pulls')) {
+        return new Response(
+          JSON.stringify([
+            {
+              title: 'Fork PR',
+              body: null,
+              html_url: 'https://github.com/org/repo/pull/99',
+              merged_at: '2026-01-01T00:00:00Z',
+              state: 'closed',
+              head: { ref: 'feature', repo: { full_name: 'other/fork' } },
+              base: { ref: 'dev' },
+            },
+          ]),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith('/commits/good/pulls')) return new Response(JSON.stringify([]), { status: 200 });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /KCM-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null }) =>
+      [...(parts.commitMessage ?? '').matchAll(pattern)].map((m) => m[0]!.toUpperCase());
+
+    const keys = await resolveIssueKeysForWorkflowRun('aaa', 'test', 'org/repo', extractAll, {
+      resolveKeyFromCommitMessage: true,
+      resolveKeysFromRecentCommits: 10,
+      allowRecentCommitScan: true,
+      skipMarker: null,
+    });
+
+    expect(keys).toEqual(['KCM-1']);
+  });
+
+  it('reads commit messages on push scan when resolveKeyFromCommitMessage is false', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=pushh')) {
+        return new Response(JSON.stringify([{ sha: 'pushh', commit: { message: 'KCM-7 deploy' } }]), {
+          status: 200,
+        });
+      }
+      if (url.endsWith('/commits/pushh/pulls')) return new Response(JSON.stringify([]), { status: 200 });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /KCM-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null; title?: string | null }) => {
+      const text = [parts.title, parts.commitMessage].filter(Boolean).join('\n');
+      return [...text.matchAll(pattern)].map((m) => m[0]!.toUpperCase());
+    };
+
+    const keys = await resolveIssueKeysForPush(
+      'pushh',
+      'test',
+      ['KCM-7 deploy'],
+      [{ sha: 'pushh', message: 'KCM-7 deploy' }],
+      'org/repo',
+      extractAll,
+      {
+        resolveKeyFromCommitMessage: false,
+        resolveKeysFromRecentCommits: 5,
+        allowRecentCommitScan: true,
+        skipMarker: null,
+      }
+    );
+
+    expect(keys).toEqual(['KCM-7']);
   });
 
   it('defaults to scanning recent commits on push deploys', () => {

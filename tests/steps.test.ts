@@ -286,6 +286,7 @@ describe('pull request runs for superseded commits', () => {
     headBranch: 'fix-login',
     runUrl: 'https://github.com/org/repo/actions/runs/1',
     runId: 1,
+    repository: 'org/repo',
   });
   const openPr = {
     title: 'PROJ-9 Fix login',

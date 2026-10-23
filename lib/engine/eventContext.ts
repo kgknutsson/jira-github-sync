@@ -39,6 +39,7 @@ export function contextFromParsed(parsed: ParsedGitHubEvent, repository: string)
         headBranch: parsed.headBranch,
         runUrl: parsed.runUrl,
         runId: parsed.runId,
+        repository,
       };
     case 'check_suite':
       return {
@@ -77,6 +78,7 @@ export function contextFromParsed(parsed: ParsedGitHubEvent, repository: string)
         ref: parsed.ref,
         headSha: parsed.headSha,
         commitMessages: parsed.commitMessages,
+        commits: parsed.commits,
         repository,
       };
     case 'release':

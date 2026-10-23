@@ -31,6 +31,7 @@ export type WorkflowRunContext = {
   headBranch: string;
   runUrl: string;
   runId: number;
+  repository: string;
 };
 
 export type CheckSuiteContext = {
@@ -71,6 +72,8 @@ export type PushContext = {
   ref: string;
   headSha: string;
   commitMessages: string[];
+  /** Commits included in the push webhook (`id` + message). */
+  commits: { sha: string; message: string }[];
   repository: string;
 };
 

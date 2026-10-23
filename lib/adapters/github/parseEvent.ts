@@ -100,6 +100,7 @@ export type ParsedGitHubEvent =
       ref: string;
       headSha: string;
       commitMessages: string[];
+      commits: { sha: string; message: string }[];
     }
   | {
       kind: 'release';
@@ -241,14 +242,18 @@ export function parseGitHubEvent(eventName: string, payload: unknown): ParsedGit
     const p = payload as {
       ref?: string;
       after?: string;
-      commits?: { message?: string }[];
+      commits?: { id?: string; message?: string }[];
     };
     if (!p.ref || !p.after) return null;
+    const commits = (p.commits ?? [])
+      .filter((c) => c.id)
+      .map((c) => ({ sha: c.id!, message: c.message ?? '' }));
     return {
       kind: 'push',
       ref: p.ref,
       headSha: p.after,
-      commitMessages: (p.commits ?? []).map((c) => c.message ?? ''),
+      commitMessages: commits.map((c) => c.message),
+      commits,
     };
   }
 

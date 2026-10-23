@@ -176,6 +176,7 @@ async function resolveIssueKeys(
     return resolveIssueKeysForWorkflowRun(
       ctx.headSha,
       branch,
+      ctx.repository,
       (parts) => keyExtractor.extractAll(parts),
       issueKeyResolveOptions(compiled, allowRecent)
     );
@@ -187,6 +188,8 @@ async function resolveIssueKeys(
       ctx.headSha,
       branch,
       ctx.commitMessages,
+      ctx.commits,
+      ctx.repository,
       (parts) => keyExtractor.extractAll(parts),
       issueKeyResolveOptions(compiled, allowRecent)
     );
