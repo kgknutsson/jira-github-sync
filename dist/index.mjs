@@ -9803,7 +9803,7 @@ function issueKeyResolveOptions(compiled, allowRecentCommitScan) {
   };
 }
 function allowRecentCommitScanForContext(ctx) {
-  if (ctx.event === "push" || ctx.event === "deployment_status") return true;
+  if (ctx.event === "deployment_status") return true;
   if (ctx.event === "check_suite" || ctx.event === "check_run") return true;
   if (ctx.event === "workflow_run") return ctx.runEvent === "push";
   return false;

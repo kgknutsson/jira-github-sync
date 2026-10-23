@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.8 — 2026-10-23
+
+### Fixed
+
+- Recent-commit scanning no longer runs on plain `push` webhooks (feature-branch pushes keep branch-name key resolution); deploy and check `workflow_run` events still scan by default.
+
 ## 1.0.7 — 2026-10-23
 
 ### Added

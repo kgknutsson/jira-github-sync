@@ -150,7 +150,8 @@ function issueKeyResolveOptions(compiled: CompiledSyncConfig, allowRecentCommitS
 }
 
 function allowRecentCommitScanForContext(ctx: SyncEventContext): boolean {
-  if (ctx.event === 'push' || ctx.event === 'deployment_status') return true;
+  // Feature-branch `push` events resolve keys from branch name / payload; recent-commit scan is for deploy/check runs.
+  if (ctx.event === 'deployment_status') return true;
   if (ctx.event === 'check_suite' || ctx.event === 'check_run') return true;
   if (ctx.event === 'workflow_run') return ctx.runEvent === 'push';
   return false;
