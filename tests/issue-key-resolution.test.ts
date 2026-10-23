@@ -444,6 +444,62 @@ describe('resolveIssueKeysForWorkflowRun', () => {
     expect(pullCalls).toBe(1);
   });
 
+  it('does not re-resolve head after a successful scan when head was already listed', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=head')) {
+        return new Response(
+          JSON.stringify([{ sha: 'head', commit: { message: 'PROJ-9 fix [skip-jira]' } }]),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith('/commits/head/pulls')) {
+        return new Response(
+          JSON.stringify([
+            {
+              title: 'PROJ-9 feature',
+              body: null,
+              html_url: 'https://github.com/org/repo/pull/1',
+              merged_at: '2026-01-01T00:00:00Z',
+              state: 'closed',
+              head: { ref: 'feature', repo: { full_name: 'org/repo' } },
+              base: { ref: 'dev' },
+            },
+          ]),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith('/commits/head') && !url.includes('/pulls')) {
+        return new Response('error', { status: 500 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /PROJ-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null; title?: string | null }) =>
+      [...[parts.commitMessage, parts.title].filter(Boolean).join('\n').matchAll(pattern)].map(
+        (m) => m[0]!.toUpperCase()
+      );
+
+    const keys = await resolveIssueKeysForPush(
+      'head',
+      'test',
+      ['PROJ-9 fix [skip-jira]'],
+      [{ sha: 'head', message: 'PROJ-9 fix [skip-jira]' }],
+      'org/repo',
+      extractAll,
+      {
+        resolveKeyFromCommitMessage: true,
+        resolveKeysFromRecentCommits: 10,
+        allowRecentCommitScan: true,
+        skipMarker: '[skip-jira]',
+      }
+    );
+
+    expect(keys).toEqual([]);
+  });
+
   it('skips keys when push list fails, payload has no commits, and head provenance fails', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
