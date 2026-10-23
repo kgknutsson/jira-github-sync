@@ -47,6 +47,7 @@ function workflowRun(workflowName: string, runEvent: string, conclusion: string 
     headBranch: 'PROJ-1-branch',
     runUrl: 'https://example.com/run/1',
     runId: 1,
+    repository: 'org/repo',
   };
 }
 

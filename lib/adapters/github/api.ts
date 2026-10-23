@@ -5,6 +5,7 @@
  *
  * @module adapters/github/api
  */
+import { log } from '../../utils/logger';
 import type { GitHubAuth, PullRequestRef } from './types';
 
 /** Returns GitHub auth from Actions env, or `null` outside Actions. */
@@ -15,7 +16,13 @@ export function readGitHubAuthFromEnv(): GitHubAuth | null {
   return { token, repository };
 }
 
-async function githubApiGet<T>(auth: GitHubAuth, path: string): Promise<T> {
+const RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function githubApiGet<T>(auth: GitHubAuth, path: string, attempt = 0): Promise<T> {
   const res = await fetch(`https://api.github.com${path}`, {
     headers: {
       Accept: 'application/vnd.github+json',
@@ -23,7 +30,13 @@ async function githubApiGet<T>(auth: GitHubAuth, path: string): Promise<T> {
       'X-GitHub-Api-Version': '2022-11-28',
     },
   });
-  if (!res.ok) throw new Error(`GitHub API ${path} failed (${res.status})`);
+  if (!res.ok) {
+    if (RETRYABLE_STATUS.has(res.status) && attempt < 2) {
+      await sleep(400 * (attempt + 1));
+      return githubApiGet(auth, path, attempt + 1);
+    }
+    throw new Error(`GitHub API ${path} failed (${res.status})`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -58,8 +71,7 @@ function pullRequestFromApi(pr: PullRequestApiItem): PullRequestRef {
   };
 }
 
-/** PRs GitHub associates with a commit SHA (for deploy / QG issue-key lookup). */
-export async function findPullRequestsForCommit(
+async function fetchPullRequestsForCommit(
   auth: GitHubAuth,
   commitSha: string
 ): Promise<PullRequestRef[]> {
@@ -71,6 +83,29 @@ export async function findPullRequestsForCommit(
     `/repos/${owner}/${repo}/commits/${commitSha}/pulls`
   );
   return pulls.map(pullRequestFromApi);
+}
+
+/**
+ * PRs for a commit SHA. Throws when the GitHub API fails (use for fork provenance checks).
+ */
+export async function findPullRequestsForCommit(
+  auth: GitHubAuth,
+  commitSha: string
+): Promise<PullRequestRef[]> {
+  return fetchPullRequestsForCommit(auth, commitSha);
+}
+
+/** Same as {@link findPullRequestsForCommit} but returns `[]` when the API fails (issue-key lookup). */
+export async function findPullRequestsForCommitBestEffort(
+  auth: GitHubAuth,
+  commitSha: string
+): Promise<PullRequestRef[]> {
+  try {
+    return await fetchPullRequestsForCommit(auth, commitSha);
+  } catch (err) {
+    log.info(`Could not list pull requests for commit ${commitSha.slice(0, 7)}`, err);
+    return [];
+  }
 }
 
 /** One pull request by number (PR details for `issue_comment` events). */
@@ -120,10 +155,61 @@ export async function getCommitMessage(
   const [owner, repo] = auth.repository.split('/');
   if (!owner || !repo) return null;
 
-  type CommitResponse = { commit?: { message?: string } };
-  const data = await githubApiGet<CommitResponse>(
-    auth,
-    `/repos/${owner}/${repo}/commits/${commitSha}`
-  );
-  return data.commit?.message ?? null;
+  try {
+    type CommitResponse = { commit?: { message?: string } };
+    const data = await githubApiGet<CommitResponse>(
+      auth,
+      `/repos/${owner}/${repo}/commits/${commitSha}`
+    );
+    return data.commit?.message ?? null;
+  } catch (err) {
+    log.info(`Could not read commit ${commitSha.slice(0, 7)}`, err);
+    return null;
+  }
+}
+
+type CommitListItem = { sha: string; commit?: { message?: string } };
+
+/**
+ * Recent commits reachable from `shaOrBranch`, newest first, capped at `limit`.
+ */
+export type RecentCommitsList = {
+  commits: { sha: string; message: string }[];
+  /** `false` when the commits API failed (distinct from an empty successful response). */
+  ok: boolean;
+};
+
+export async function listRecentCommitsOnBranch(
+  auth: GitHubAuth,
+  shaOrBranch: string,
+  options: { limit: number }
+): Promise<RecentCommitsList> {
+  const [owner, repo] = auth.repository.split('/');
+  if (!owner || !repo || options.limit <= 0) return { commits: [], ok: true };
+
+  const commits: { sha: string; message: string }[] = [];
+  let page = 1;
+  const perPage = Math.min(100, options.limit);
+
+  try {
+    while (commits.length < options.limit) {
+      const data = await githubApiGet<CommitListItem[]>(
+        auth,
+        `/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(shaOrBranch)}&per_page=${perPage}&page=${page}`
+      );
+      if (data.length === 0) break;
+
+      for (const item of data) {
+        commits.push({ sha: item.sha, message: item.commit?.message ?? '' });
+        if (commits.length >= options.limit) return { commits, ok: true };
+      }
+
+      if (data.length < perPage) break;
+      page += 1;
+    }
+    return { commits, ok: true };
+  } catch (err) {
+    log.info(`Could not list commits on ${shaOrBranch}`, err);
+    return { commits: [], ok: false };
+  }
 }

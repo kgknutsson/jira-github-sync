@@ -8068,6 +8068,7 @@ function auditWorkflow(built, workflowText, options = {}) {
 var DEFAULT_SYNC_OPTIONS = {
   resolveKeyFromCommitMessage: true,
   processAllMatchingIssueKeys: false,
+  resolveKeysFromRecentCommits: 100,
   failOnJiraError: true,
   skipMarker: "[skip-jira]",
   noTransitionMessageId: "noTransition"
@@ -8220,10 +8221,12 @@ var TOP_KEYS = ["projectKey", "options", "messages", "deploy", "rules"];
 var OPTION_TYPES = {
   resolveKeyFromCommitMessage: "boolean",
   processAllMatchingIssueKeys: "boolean",
+  resolveKeysFromRecentCommits: "number",
   failOnJiraError: "boolean",
   skipMarker: "string-or-null",
   noTransitionMessageId: "string-or-null"
 };
+var MAX_RECENT_COMMITS = 250;
 var DEPLOY_KEYS = ["jobNameRegex", "branchToEnvironment", "environmentToJiraStatus"];
 var ACTION_KEYS = ["transitionTo", "deployToJiraStatus", "comment"];
 var RULE_KEYS = [
@@ -8378,13 +8381,30 @@ function readOptions(raw, messages, report) {
   for (const [key, type] of Object.entries(OPTION_TYPES)) {
     if (!(key in raw)) continue;
     const value = raw[key];
-    if (type === "boolean" ? typeof value === "boolean" : value === null || typeof value === "string") {
-      writable[key] = value;
-    } else if (type === "boolean") {
-      report(["options", key], `options.${key} must be true or false`);
-    } else {
-      const hint = Array.isArray(value) ? ` (quote values that start with "[", e.g. '[skip-jira]')` : "";
-      report(["options", key], `options.${key} must be text or null${hint}`);
+    if (type === "boolean") {
+      if (typeof value === "boolean") writable[key] = value;
+      else report(["options", key], `options.${key} must be true or false`);
+    } else if (type === "string-or-null") {
+      if (value === null || typeof value === "string") writable[key] = value;
+      else {
+        const hint = Array.isArray(value) ? ` (quote values that start with "[", e.g. '[skip-jira]')` : "";
+        report(["options", key], `options.${key} must be text or null${hint}`);
+      }
+    } else if (type === "number") {
+      if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_RECENT_COMMITS) {
+        writable[key] = value;
+      } else {
+        report(
+          ["options", key],
+          `options.${key} must be an integer from 0 to ${MAX_RECENT_COMMITS}`
+        );
+      }
+    } else if (type === "string-list") {
+      if (Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0)) {
+        writable[key] = value;
+      } else {
+        report(["options", key], `options.${key} must be a list of branch names`);
+      }
     }
   }
   return options;
@@ -8672,11 +8692,13 @@ function parseGitHubEvent(eventName, payload) {
   if (eventName === "push") {
     const p = payload;
     if (!p.ref || !p.after) return null;
+    const commits = (p.commits ?? []).filter((c) => c.id).map((c) => ({ sha: c.id, message: c.message ?? "" }));
     return {
       kind: "push",
       ref: p.ref,
       headSha: p.after,
-      commitMessages: (p.commits ?? []).map((c) => c.message ?? "")
+      commitMessages: commits.map((c) => c.message),
+      commits
     };
   }
   if (eventName === "release") {
@@ -8750,7 +8772,8 @@ function contextFromParsed(parsed, repository) {
         headSha: parsed.headSha,
         headBranch: parsed.headBranch,
         runUrl: parsed.runUrl,
-        runId: parsed.runId
+        runId: parsed.runId,
+        repository
       };
     case "check_suite":
       return {
@@ -8789,6 +8812,7 @@ function contextFromParsed(parsed, repository) {
         ref: parsed.ref,
         headSha: parsed.headSha,
         commitMessages: parsed.commitMessages,
+        commits: parsed.commits,
         repository
       };
     case "release":
@@ -8834,6 +8858,47 @@ function readEventContext(env = process.env) {
   return { ctx: contextFromParsed(parsed, repository) };
 }
 
+// lib/utils/logger.ts
+var PREFIX = "[jira-sync]";
+function escapeData(text) {
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+function escapeProperty(text) {
+  return escapeData(text).replace(/:/g, "%3A").replace(/,/g, "%2C");
+}
+var log = {
+  info(message, err) {
+    if (err !== void 0) {
+      console.log(`${PREFIX} ${message}`, err);
+    } else {
+      console.log(`${PREFIX} ${message}`);
+    }
+  },
+  error(message, err) {
+    if (err !== void 0) {
+      console.error(`${PREFIX} ${message}`, err);
+    } else {
+      console.error(`${PREFIX} ${message}`);
+    }
+  },
+  /** A workflow annotation (`::warning file=…::`) inside Actions; a plain log line elsewhere. */
+  annotate(level, message, location = {}) {
+    if (process.env.GITHUB_ACTIONS === "true") {
+      const properties = [
+        location.file && `file=${escapeProperty(location.file)}`,
+        location.line && `line=${location.line}`,
+        location.column && `col=${location.column}`
+      ].filter(Boolean).join(",");
+      console.log(`::${level}${properties ? ` ${properties}` : ""}::${escapeData(message)}`);
+      return;
+    }
+    const where = location.file ? `${location.file}${location.line ? `:${location.line}` : ""}${location.column ? `:${location.column}` : ""} ` : "";
+    const line = `${PREFIX} ${level}: ${where}${message}`;
+    if (level === "error") console.error(line);
+    else console.log(line);
+  }
+};
+
 // lib/adapters/github/api.ts
 function readGitHubAuthFromEnv() {
   const token = process.env.GITHUB_TOKEN;
@@ -8841,7 +8906,11 @@ function readGitHubAuthFromEnv() {
   if (!token || !repository) return null;
   return { token, repository };
 }
-async function githubApiGet(auth, path) {
+var RETRYABLE_STATUS = /* @__PURE__ */ new Set([500, 502, 503, 504]);
+function sleep2(ms) {
+  return new Promise((resolve2) => setTimeout(resolve2, ms));
+}
+async function githubApiGet(auth, path, attempt = 0) {
   const res = await fetch(`https://api.github.com${path}`, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -8849,7 +8918,13 @@ async function githubApiGet(auth, path) {
       "X-GitHub-Api-Version": "2022-11-28"
     }
   });
-  if (!res.ok) throw new Error(`GitHub API ${path} failed (${res.status})`);
+  if (!res.ok) {
+    if (RETRYABLE_STATUS.has(res.status) && attempt < 2) {
+      await sleep2(400 * (attempt + 1));
+      return githubApiGet(auth, path, attempt + 1);
+    }
+    throw new Error(`GitHub API ${path} failed (${res.status})`);
+  }
   return res.json();
 }
 function pullRequestFromApi(pr) {
@@ -8868,7 +8943,7 @@ function pullRequestFromApi(pr) {
     ...pr.head.sha ? { headSha: pr.head.sha } : {}
   };
 }
-async function findPullRequestsForCommit(auth, commitSha) {
+async function fetchPullRequestsForCommit(auth, commitSha) {
   const [owner, repo] = auth.repository.split("/");
   if (!owner || !repo) return [];
   const pulls = await githubApiGet(
@@ -8876,6 +8951,17 @@ async function findPullRequestsForCommit(auth, commitSha) {
     `/repos/${owner}/${repo}/commits/${commitSha}/pulls`
   );
   return pulls.map(pullRequestFromApi);
+}
+async function findPullRequestsForCommit(auth, commitSha) {
+  return fetchPullRequestsForCommit(auth, commitSha);
+}
+async function findPullRequestsForCommitBestEffort(auth, commitSha) {
+  try {
+    return await fetchPullRequestsForCommit(auth, commitSha);
+  } catch (err) {
+    log.info(`Could not list pull requests for commit ${commitSha.slice(0, 7)}`, err);
+    return [];
+  }
 }
 async function getPullRequest(auth, pullNumber) {
   const [owner, repo] = auth.repository.split("/");
@@ -8901,11 +8987,42 @@ function isFromSameRepository(pr, repository) {
 async function getCommitMessage(auth, commitSha) {
   const [owner, repo] = auth.repository.split("/");
   if (!owner || !repo) return null;
-  const data = await githubApiGet(
-    auth,
-    `/repos/${owner}/${repo}/commits/${commitSha}`
-  );
-  return data.commit?.message ?? null;
+  try {
+    const data = await githubApiGet(
+      auth,
+      `/repos/${owner}/${repo}/commits/${commitSha}`
+    );
+    return data.commit?.message ?? null;
+  } catch (err) {
+    log.info(`Could not read commit ${commitSha.slice(0, 7)}`, err);
+    return null;
+  }
+}
+async function listRecentCommitsOnBranch(auth, shaOrBranch, options) {
+  const [owner, repo] = auth.repository.split("/");
+  if (!owner || !repo || options.limit <= 0) return { commits: [], ok: true };
+  const commits = [];
+  let page = 1;
+  const perPage = Math.min(100, options.limit);
+  try {
+    while (commits.length < options.limit) {
+      const data = await githubApiGet(
+        auth,
+        `/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(shaOrBranch)}&per_page=${perPage}&page=${page}`
+      );
+      if (data.length === 0) break;
+      for (const item of data) {
+        commits.push({ sha: item.sha, message: item.commit?.message ?? "" });
+        if (commits.length >= options.limit) return { commits, ok: true };
+      }
+      if (data.length < perPage) break;
+      page += 1;
+    }
+    return { commits, ok: true };
+  } catch (err) {
+    log.info(`Could not list commits on ${shaOrBranch}`, err);
+    return { commits: [], ok: false };
+  }
 }
 
 // lib/utils/formatMessage.ts
@@ -9001,47 +9118,6 @@ function actionTemplateVars(ctx, issueKey, jiraStatus) {
       return base;
   }
 }
-
-// lib/utils/logger.ts
-var PREFIX = "[jira-sync]";
-function escapeData(text) {
-  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
-}
-function escapeProperty(text) {
-  return escapeData(text).replace(/:/g, "%3A").replace(/,/g, "%2C");
-}
-var log = {
-  info(message, err) {
-    if (err !== void 0) {
-      console.log(`${PREFIX} ${message}`, err);
-    } else {
-      console.log(`${PREFIX} ${message}`);
-    }
-  },
-  error(message, err) {
-    if (err !== void 0) {
-      console.error(`${PREFIX} ${message}`, err);
-    } else {
-      console.error(`${PREFIX} ${message}`);
-    }
-  },
-  /** A workflow annotation (`::warning file=…::`) inside Actions; a plain log line elsewhere. */
-  annotate(level, message, location = {}) {
-    if (process.env.GITHUB_ACTIONS === "true") {
-      const properties = [
-        location.file && `file=${escapeProperty(location.file)}`,
-        location.line && `line=${location.line}`,
-        location.column && `col=${location.column}`
-      ].filter(Boolean).join(",");
-      console.log(`::${level}${properties ? ` ${properties}` : ""}::${escapeData(message)}`);
-      return;
-    }
-    const where = location.file ? `${location.file}${location.line ? `:${location.line}` : ""}${location.column ? `:${location.column}` : ""} ` : "";
-    const line = `${PREFIX} ${level}: ${where}${message}`;
-    if (level === "error") console.error(line);
-    else console.log(line);
-  }
-};
 
 // lib/actions/ruleComments.ts
 function ruleAllowsComments(step) {
@@ -9198,30 +9274,6 @@ async function runDeployAction(step, ctx) {
   }
   return "skipped";
 }
-async function resolveIssueKeysForWorkflowRun(headSha, headBranch, extractAll, options) {
-  const parts = { branch: headBranch };
-  const gh = readGitHubAuthFromEnv();
-  if (gh) {
-    const prs = await findPullRequestsForCommit(gh, headSha);
-    for (const pr of prs) {
-      parts.title = pr.title;
-      parts.body = pr.body;
-      parts.branch = pr.headRef;
-      const fromPr = extractAll(parts);
-      if (fromPr.length > 0) return fromPr;
-    }
-    if (options.resolveKeyFromCommitMessage) {
-      parts.commitMessage = await getCommitMessage(gh, headSha);
-      const fromCommit = extractAll({
-        title: parts.title,
-        body: parts.body,
-        commitMessage: parts.commitMessage
-      });
-      if (fromCommit.length > 0) return fromCommit;
-    }
-  }
-  return extractAll({ branch: headBranch });
-}
 
 // lib/actions/transitionAction.ts
 async function commentWithKey2(step, ctx, messageKey, extra) {
@@ -9314,6 +9366,250 @@ function normalizeIssueKey(raw) {
 function textContainsSkipMarker(text, marker) {
   if (!marker) return false;
   return text.toLowerCase().includes(marker.toLowerCase());
+}
+
+// lib/actions/issueKeyResolution.ts
+function shouldScanRecentCommits(options) {
+  return options.allowRecentCommitScan && options.resolveKeysFromRecentCommits > 0;
+}
+function mergeUnique(into, keys) {
+  const seen = new Set(into);
+  for (const key of keys) {
+    if (!seen.has(key)) {
+      seen.add(key);
+      into.push(key);
+    }
+  }
+  return into;
+}
+async function verifyCommitProvenance(commitSha, repository) {
+  const gh = readGitHubAuthFromEnv();
+  if (!gh) {
+    log.info(`Skipping keys from ${commitSha.slice(0, 7)}: GITHUB_TOKEN not set`);
+    return { ok: false };
+  }
+  try {
+    const prs = await findPullRequestsForCommit(gh, commitSha);
+    if (prs.some((pr) => !isFromSameRepository(pr, repository))) {
+      log.info(`Skipping keys from ${commitSha.slice(0, 7)}: linked to fork PR`);
+      return { ok: false };
+    }
+    return { ok: true, prs };
+  } catch (err) {
+    log.info(`Skipping keys from ${commitSha.slice(0, 7)}: could not verify PR provenance`, err);
+    return { ok: false };
+  }
+}
+async function keysForCommitSha(headSha, headBranch, extractAll, resolveKeyFromCommitMessage, collectAll, options) {
+  const gh = readGitHubAuthFromEnv();
+  if (!gh) {
+    return options.useBranchFallback ? extractAll({ branch: headBranch }) : [];
+  }
+  let commitMessage = options.knownCommitMessage;
+  if (commitMessage === void 0) {
+    commitMessage = await getCommitMessage(gh, headSha);
+  }
+  if (options.skipMarker && textContainsSkipMarker(commitMessage ?? "", options.skipMarker)) {
+    log.info(`Skip marker in commit ${headSha.slice(0, 7)}; ignoring for issue keys`);
+    return [];
+  }
+  const prs = options.knownPullRequests ?? await findPullRequestsForCommitBestEffort(gh, headSha);
+  if (options.skipMarker && prs.some(
+    (pr) => [pr.title, pr.body ?? "", pr.headRef].some((t) => textContainsSkipMarker(t, options.skipMarker))
+  )) {
+    log.info(`Skip marker on a PR linked to ${headSha.slice(0, 7)}; ignoring commit for issue keys`);
+    return [];
+  }
+  const keys = [];
+  if (resolveKeyFromCommitMessage) {
+    mergeUnique(keys, extractAll({ commitMessage }));
+    if (!collectAll && keys.length > 0) return keys;
+  }
+  for (const pr of prs) {
+    const fromPr = extractAll({
+      title: pr.title,
+      body: pr.body,
+      branch: pr.headRef
+    });
+    if (fromPr.length > 0) {
+      if (collectAll) mergeUnique(keys, fromPr);
+      else return fromPr;
+    }
+  }
+  if (keys.length > 0) return keys;
+  if (options.useBranchFallback) {
+    return extractAll({ branch: headBranch });
+  }
+  return [];
+}
+async function scanRecentCommitKeys(headSha, headBranch, repository, extractAll, options, forceCommitMessages) {
+  const resolveFromMessage = forceCommitMessages || options.resolveKeyFromCommitMessage;
+  const scanOptions = {
+    skipMarker: options.skipMarker,
+    useBranchFallback: false
+  };
+  const gh = readGitHubAuthFromEnv();
+  if (!gh) {
+    log.info("GITHUB_TOKEN not set; recent-commit issue key scan skipped");
+    return { keys: [], listFailed: true };
+  }
+  const { commits, ok } = await listRecentCommitsOnBranch(gh, headSha, {
+    limit: options.resolveKeysFromRecentCommits
+  });
+  if (!ok) {
+    return { keys: [], listFailed: true };
+  }
+  log.info(
+    `Scanning ${commits.length} commit(s) on ${headBranch} for issue keys (limit ${options.resolveKeysFromRecentCommits})`
+  );
+  const keys = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const commit of commits) {
+    const provenance = await verifyCommitProvenance(commit.sha, repository);
+    if (!provenance.ok) continue;
+    const fromCommit = await keysForCommitSha(
+      commit.sha,
+      headBranch,
+      extractAll,
+      resolveFromMessage,
+      true,
+      {
+        ...scanOptions,
+        knownCommitMessage: commit.message,
+        knownPullRequests: provenance.prs
+      }
+    );
+    for (const key of fromCommit) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+  }
+  if (keys.length > 0) return { keys, listFailed: false };
+  if (commits.some((c) => c.sha === headSha)) {
+    return { keys: [], listFailed: false };
+  }
+  const headProvenance = await verifyCommitProvenance(headSha, repository);
+  if (!headProvenance.ok) {
+    return { keys: [], listFailed: false };
+  }
+  const headKeys = await keysForCommitSha(
+    headSha,
+    headBranch,
+    extractAll,
+    resolveFromMessage,
+    true,
+    { ...scanOptions, knownPullRequests: headProvenance.prs }
+  );
+  return { keys: headKeys, listFailed: false };
+}
+async function keysFromPushCommits(commits, branch, repository, extractAll, options) {
+  const keys = [];
+  const seen = /* @__PURE__ */ new Set();
+  const scanOptions = {
+    skipMarker: options.skipMarker,
+    useBranchFallback: false
+  };
+  for (const commit of commits) {
+    if (!commit.sha) continue;
+    const provenance = await verifyCommitProvenance(commit.sha, repository);
+    if (!provenance.ok) continue;
+    const fromCommit = await keysForCommitSha(
+      commit.sha,
+      branch,
+      extractAll,
+      true,
+      true,
+      {
+        ...scanOptions,
+        knownCommitMessage: commit.message,
+        knownPullRequests: provenance.prs
+      }
+    );
+    for (const key of fromCommit) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+  }
+  return keys;
+}
+async function resolveIssueKeysForWorkflowRun(headSha, headBranch, repository, extractAll, options) {
+  if (shouldScanRecentCommits(options)) {
+    const { keys, listFailed } = await scanRecentCommitKeys(
+      headSha,
+      headBranch,
+      repository,
+      extractAll,
+      options,
+      false
+    );
+    if (listFailed) {
+      const provenance = await verifyCommitProvenance(headSha, repository);
+      if (!provenance.ok) return [];
+      return keysForCommitSha(
+        headSha,
+        headBranch,
+        extractAll,
+        options.resolveKeyFromCommitMessage,
+        true,
+        {
+          skipMarker: options.skipMarker,
+          useBranchFallback: false,
+          knownPullRequests: provenance.prs
+        }
+      );
+    }
+    return keys;
+  }
+  return keysForCommitSha(
+    headSha,
+    headBranch,
+    extractAll,
+    options.resolveKeyFromCommitMessage,
+    false,
+    { skipMarker: options.skipMarker, useBranchFallback: true }
+  );
+}
+async function resolveIssueKeysForPush(headSha, branch, commitMessagesFromPayload, pushCommits, repository, extractAll, options) {
+  if (shouldScanRecentCommits(options)) {
+    const { keys, listFailed } = await scanRecentCommitKeys(
+      headSha,
+      branch,
+      repository,
+      extractAll,
+      options,
+      true
+    );
+    if (listFailed) {
+      if (pushCommits.length > 0) {
+        return keysFromPushCommits(pushCommits, branch, repository, extractAll, options);
+      }
+      const provenance = await verifyCommitProvenance(headSha, repository);
+      if (!provenance.ok) return [];
+      return keysForCommitSha(headSha, branch, extractAll, true, true, {
+        skipMarker: options.skipMarker,
+        useBranchFallback: false,
+        knownPullRequests: provenance.prs
+      });
+    }
+    return keys;
+  }
+  const fromPayload = extractAll({
+    branch,
+    commitMessage: commitMessagesFromPayload.join("\n")
+  });
+  if (fromPayload.length > 0) return fromPayload;
+  return keysForCommitSha(
+    headSha,
+    branch,
+    extractAll,
+    options.resolveKeyFromCommitMessage,
+    false,
+    { skipMarker: options.skipMarker, useBranchFallback: true }
+  );
 }
 
 // lib/engine/matchRule.ts
@@ -9458,7 +9754,7 @@ async function skipTextsForSha(headSha, headBranch) {
   const texts = [headBranch];
   const gh = readGitHubAuthFromEnv();
   if (!gh) return texts;
-  const prs = await findPullRequestsForCommit(gh, headSha);
+  const prs = await findPullRequestsForCommitBestEffort(gh, headSha);
   for (const pr of prs) {
     texts.push(pr.title, pr.body ?? "", pr.headRef);
   }
@@ -9498,23 +9794,44 @@ async function skipTextsForContext(ctx) {
       return [];
   }
 }
+function issueKeyResolveOptions(compiled, allowRecentCommitScan) {
+  return {
+    resolveKeyFromCommitMessage: compiled.options.resolveKeyFromCommitMessage,
+    resolveKeysFromRecentCommits: compiled.options.resolveKeysFromRecentCommits,
+    allowRecentCommitScan,
+    skipMarker: compiled.options.skipMarker
+  };
+}
+function allowRecentCommitScanForContext(ctx) {
+  if (ctx.event === "push" || ctx.event === "deployment_status") return true;
+  if (ctx.event === "check_suite" || ctx.event === "check_run") return true;
+  if (ctx.event === "workflow_run") return ctx.runEvent === "push";
+  return false;
+}
 async function resolveIssueKeys(compiled, ctx) {
   const keyExtractor = createIssueKeyExtractor(compiled.issueKeyPattern);
+  const allowRecent = allowRecentCommitScanForContext(ctx);
   if (ctx.event === "workflow_run" || ctx.event === "check_suite" || ctx.event === "check_run" || ctx.event === "deployment_status") {
     const branch = ctx.event === "deployment_status" ? ctx.ref.replace(/^refs\/heads\//, "") : ctx.headBranch;
     return resolveIssueKeysForWorkflowRun(
       ctx.headSha,
       branch,
+      ctx.repository,
       (parts) => keyExtractor.extractAll(parts),
-      { resolveKeyFromCommitMessage: compiled.options.resolveKeyFromCommitMessage }
+      issueKeyResolveOptions(compiled, allowRecent)
     );
   }
   if (ctx.event === "push") {
     const branch = ctx.ref.replace(/^refs\/heads\//, "");
-    return keyExtractor.extractAll({
+    return resolveIssueKeysForPush(
+      ctx.headSha,
       branch,
-      commitMessage: ctx.commitMessages.join("\n")
-    });
+      ctx.commitMessages,
+      ctx.commits,
+      ctx.repository,
+      (parts) => keyExtractor.extractAll(parts),
+      issueKeyResolveOptions(compiled, allowRecent)
+    );
   }
   if (ctx.event === "issue_comment") {
     if (ctx.pr) {
@@ -9552,14 +9869,14 @@ async function syncOneIssue(compiled, ctx, jira, issueKey) {
   } catch (err) {
     if (err instanceof JiraIssueNotFoundError) {
       log.annotate("warning", `${issueKey} not updated: Jira answered 404. ${await explainIssueNotFound(jira, issueKey)}`);
-      return;
+      return false;
     }
     throw err;
   }
   const rule = findMatchingRule(compiled.built, ctx, jiraStatus);
   if (!rule) {
     log.info(`No rule matched (${ctx.event}) for ${issueKey}`);
-    return;
+    return false;
   }
   log.info(`Rule: ${rule.name} [${rule.id}] \u2192 ${issueKey}`);
   await executeAction(rule.then, {
@@ -9569,6 +9886,7 @@ async function syncOneIssue(compiled, ctx, jira, issueKey) {
     event: ctx,
     jiraStatus
   });
+  return true;
 }
 async function runSyncForContext(compiled, eventCtx) {
   const ctx = await withPullRequest(eventCtx);
@@ -9591,7 +9909,13 @@ async function runSyncForContext(compiled, eventCtx) {
   if (ctx.event === "workflow_run" || ctx.event === "check_suite" || ctx.event === "check_run") {
     const gh = readGitHubAuthFromEnv();
     if (gh) {
-      const prs = await findPullRequestsForCommit(gh, ctx.headSha);
+      let prs;
+      try {
+        prs = await findPullRequestsForCommit(gh, ctx.headSha);
+      } catch (err) {
+        log.info(`Could not verify pull request provenance for ${ctx.headSha.slice(0, 7)}; skipping`, err);
+        return;
+      }
       if (prs.some((pr) => !isFromSameRepository(pr, gh.repository))) {
         log.info(`Skipping ${ctx.event} linked to a fork pull request`);
         return;
@@ -9604,7 +9928,8 @@ async function runSyncForContext(compiled, eventCtx) {
     }
   }
   const marker = compiled.options.skipMarker;
-  if (marker) {
+  const perCommitSkipResolution = compiled.options.resolveKeysFromRecentCommits > 0 && allowRecentCommitScanForContext(ctx);
+  if (marker && !perCommitSkipResolution) {
     const texts = await skipTextsForContext(ctx);
     if (texts.some((t) => textContainsSkipMarker(t, marker))) {
       log.info(`Skip marker "${marker}" present; skipping`);
@@ -9617,9 +9942,13 @@ async function runSyncForContext(compiled, eventCtx) {
     return;
   }
   let keysToProcess = issueKeys;
-  if (!compiled.options.processAllMatchingIssueKeys && keysToProcess.length > 1) {
+  const processAll = compiled.options.processAllMatchingIssueKeys || compiled.options.resolveKeysFromRecentCommits > 0 && allowRecentCommitScanForContext(ctx);
+  if (!processAll && keysToProcess.length > 1) {
     keysToProcess = [keysToProcess[0]];
   }
+  log.info(
+    `Issue keys for ${ctx.event} (${keysToProcess.length}${keysToProcess.length !== issueKeys.length ? ` of ${issueKeys.length}` : ""}): ${keysToProcess.join(", ")}`
+  );
   const jira = readJiraConfigFromEnv();
   if (!jira) {
     log.annotate(
@@ -9628,18 +9957,25 @@ async function runSyncForContext(compiled, eventCtx) {
     );
     return;
   }
+  let matched = 0;
+  let noRule = 0;
+  let failed = 0;
   for (const issueKey of keysToProcess) {
     try {
-      await syncOneIssue(compiled, ctx, jira, issueKey);
+      if (await syncOneIssue(compiled, ctx, jira, issueKey)) matched += 1;
+      else noRule += 1;
     } catch (err) {
       if (err instanceof JiraIssueNotFoundError) {
         log.info(`Issue ${issueKey} not found; skipping`);
+        noRule += 1;
         continue;
       }
+      failed += 1;
       log.error(`Jira sync failed for ${issueKey}`, err);
       if (compiled.options.failOnJiraError) throw err;
     }
   }
+  log.info(`Sync summary: ${matched} rule(s) applied, ${noRule} skipped (no rule/status), ${failed} failed`);
 }
 
 // index.ts

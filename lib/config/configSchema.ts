@@ -79,6 +79,13 @@ export function buildConfigSchema(): Schema {
             type: 'boolean',
             description: 'Apply the matched rule to every issue key found instead of only the first. Default false.',
           },
+          resolveKeysFromRecentCommits: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 250,
+            description:
+              'On push deploys, push, and deployment events: scan up to this many recent commits for issue keys. 0 disables. Default 100.',
+          },
           failOnJiraError: {
             type: 'boolean',
             description: 'Fail the job on Jira API errors (missing issues are always skipped). Default true.',
