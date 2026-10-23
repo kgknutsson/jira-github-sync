@@ -397,4 +397,85 @@ describe('resolveIssueKeysForWorkflowRun', () => {
   it('defaults to scanning recent commits on push deploys', () => {
     expect(DEFAULT_SYNC_OPTIONS.resolveKeysFromRecentCommits).toBe(100);
   });
+
+  it('reuses verified PR metadata so a later PR lookup failure cannot bypass skip markers', async () => {
+    let pullCalls = 0;
+    const skipPr = [
+      {
+        title: 'Feature',
+        body: '[skip-jira]',
+        html_url: 'https://github.com/org/repo/pull/8',
+        merged_at: '2026-01-01T00:00:00Z',
+        state: 'closed',
+        head: { ref: 'feature', repo: { full_name: 'org/repo' } },
+        base: { ref: 'dev' },
+      },
+    ];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=only')) {
+        return new Response(JSON.stringify([{ sha: 'only', commit: { message: 'KCM-9 fix' } }]), {
+          status: 200,
+        });
+      }
+      if (url.endsWith('/commits/only/pulls')) {
+        pullCalls += 1;
+        if (pullCalls === 1) return new Response(JSON.stringify(skipPr), { status: 200 });
+        return new Response('error', { status: 500 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /KCM-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null; body?: string | null }) =>
+      [...[parts.commitMessage, parts.body].filter(Boolean).join('\n').matchAll(pattern)].map(
+        (m) => m[0]!.toUpperCase()
+      );
+
+    const keys = await resolveIssueKeysForWorkflowRun('only', 'staging', 'org/repo', extractAll, {
+      resolveKeyFromCommitMessage: true,
+      resolveKeysFromRecentCommits: 5,
+      allowRecentCommitScan: true,
+      skipMarker: '[skip-jira]',
+    });
+
+    expect(keys).toEqual([]);
+    expect(pullCalls).toBe(1);
+  });
+
+  it('skips keys when push list fails, payload has no commits, and head provenance fails', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=head')) {
+        return new Response('error', { status: 500 });
+      }
+      if (url.endsWith('/commits/head/pulls')) {
+        return new Response('error', { status: 500 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /KCM-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null }) =>
+      [...(parts.commitMessage ?? '').matchAll(pattern)].map((m) => m[0]!.toUpperCase());
+
+    const keys = await resolveIssueKeysForPush(
+      'head',
+      'test',
+      [],
+      [],
+      'org/repo',
+      extractAll,
+      {
+        resolveKeyFromCommitMessage: true,
+        resolveKeysFromRecentCommits: 10,
+        allowRecentCommitScan: true,
+        skipMarker: null,
+      }
+    );
+
+    expect(keys).toEqual([]);
+  });
 });

@@ -9382,22 +9382,22 @@ function mergeUnique(into, keys) {
   }
   return into;
 }
-async function commitProvenanceOk(commitSha, repository) {
+async function verifyCommitProvenance(commitSha, repository) {
   const gh = readGitHubAuthFromEnv();
   if (!gh) {
     log.info(`Skipping keys from ${commitSha.slice(0, 7)}: GITHUB_TOKEN not set`);
-    return false;
+    return { ok: false };
   }
   try {
     const prs = await findPullRequestsForCommit(gh, commitSha);
     if (prs.some((pr) => !isFromSameRepository(pr, repository))) {
       log.info(`Skipping keys from ${commitSha.slice(0, 7)}: linked to fork PR`);
-      return false;
+      return { ok: false };
     }
-    return true;
+    return { ok: true, prs };
   } catch (err) {
     log.info(`Skipping keys from ${commitSha.slice(0, 7)}: could not verify PR provenance`, err);
-    return false;
+    return { ok: false };
   }
 }
 async function keysForCommitSha(headSha, headBranch, extractAll, resolveKeyFromCommitMessage, collectAll, options) {
@@ -9413,7 +9413,7 @@ async function keysForCommitSha(headSha, headBranch, extractAll, resolveKeyFromC
     log.info(`Skip marker in commit ${headSha.slice(0, 7)}; ignoring for issue keys`);
     return [];
   }
-  const prs = await findPullRequestsForCommitBestEffort(gh, headSha);
+  const prs = options.knownPullRequests ?? await findPullRequestsForCommitBestEffort(gh, headSha);
   if (options.skipMarker && prs.some(
     (pr) => [pr.title, pr.body ?? "", pr.headRef].some((t) => textContainsSkipMarker(t, options.skipMarker))
   )) {
@@ -9465,14 +9465,19 @@ async function scanRecentCommitKeys(headSha, headBranch, repository, extractAll,
   const keys = [];
   const seen = /* @__PURE__ */ new Set();
   for (const commit of commits) {
-    if (!await commitProvenanceOk(commit.sha, repository)) continue;
+    const provenance = await verifyCommitProvenance(commit.sha, repository);
+    if (!provenance.ok) continue;
     const fromCommit = await keysForCommitSha(
       commit.sha,
       headBranch,
       extractAll,
       resolveFromMessage,
       true,
-      { ...scanOptions, knownCommitMessage: commit.message }
+      {
+        ...scanOptions,
+        knownCommitMessage: commit.message,
+        knownPullRequests: provenance.prs
+      }
     );
     for (const key of fromCommit) {
       if (!seen.has(key)) {
@@ -9482,7 +9487,11 @@ async function scanRecentCommitKeys(headSha, headBranch, repository, extractAll,
     }
   }
   if (keys.length > 0) return { keys, listFailed: false };
-  if (!await commitProvenanceOk(headSha, repository)) {
+  if (commits.some((c) => c.sha === headSha)) {
+    return { keys: [], listFailed: false };
+  }
+  const headProvenance = await verifyCommitProvenance(headSha, repository);
+  if (!headProvenance.ok) {
     return { keys: [], listFailed: false };
   }
   const headKeys = await keysForCommitSha(
@@ -9491,7 +9500,7 @@ async function scanRecentCommitKeys(headSha, headBranch, repository, extractAll,
     extractAll,
     resolveFromMessage,
     true,
-    scanOptions
+    { ...scanOptions, knownPullRequests: headProvenance.prs }
   );
   return { keys: headKeys, listFailed: false };
 }
@@ -9504,14 +9513,19 @@ async function keysFromPushCommits(commits, branch, repository, extractAll, opti
   };
   for (const commit of commits) {
     if (!commit.sha) continue;
-    if (!await commitProvenanceOk(commit.sha, repository)) continue;
+    const provenance = await verifyCommitProvenance(commit.sha, repository);
+    if (!provenance.ok) continue;
     const fromCommit = await keysForCommitSha(
       commit.sha,
       branch,
       extractAll,
       true,
       true,
-      { ...scanOptions, knownCommitMessage: commit.message }
+      {
+        ...scanOptions,
+        knownCommitMessage: commit.message,
+        knownPullRequests: provenance.prs
+      }
     );
     for (const key of fromCommit) {
       if (!seen.has(key)) {
@@ -9533,14 +9547,19 @@ async function resolveIssueKeysForWorkflowRun(headSha, headBranch, repository, e
       false
     );
     if (listFailed) {
-      if (!await commitProvenanceOk(headSha, repository)) return [];
+      const provenance = await verifyCommitProvenance(headSha, repository);
+      if (!provenance.ok) return [];
       return keysForCommitSha(
         headSha,
         headBranch,
         extractAll,
         options.resolveKeyFromCommitMessage,
         true,
-        { skipMarker: options.skipMarker, useBranchFallback: false }
+        {
+          skipMarker: options.skipMarker,
+          useBranchFallback: false,
+          knownPullRequests: provenance.prs
+        }
       );
     }
     return keys;
@@ -9568,10 +9587,12 @@ async function resolveIssueKeysForPush(headSha, branch, commitMessagesFromPayloa
       if (pushCommits.length > 0) {
         return keysFromPushCommits(pushCommits, branch, repository, extractAll, options);
       }
-      if (!await commitProvenanceOk(headSha, repository)) return [];
+      const provenance = await verifyCommitProvenance(headSha, repository);
+      if (!provenance.ok) return [];
       return keysForCommitSha(headSha, branch, extractAll, true, true, {
         skipMarker: options.skipMarker,
-        useBranchFallback: false
+        useBranchFallback: false,
+        knownPullRequests: provenance.prs
       });
     }
     return keys;
