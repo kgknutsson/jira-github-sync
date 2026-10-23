@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveIssueKeysForWorkflowRun } from '../lib/actions/issueKeyResolution';
+import {
+  resolveIssueKeysForPush,
+  resolveIssueKeysForWorkflowRun,
+} from '../lib/actions/issueKeyResolution';
 import { DEFAULT_SYNC_OPTIONS } from '../lib/config/syncOptions';
 
 describe('resolveIssueKeysForWorkflowRun', () => {
@@ -89,6 +92,80 @@ describe('resolveIssueKeysForWorkflowRun', () => {
     });
 
     expect(keys).toEqual(['KCM-9']);
+  });
+
+  it('merges keys from commit message and linked PR during scans', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=mix')) {
+        return new Response(JSON.stringify([{ sha: 'mix', commit: { message: 'KCM-1 tweak' } }]), {
+          status: 200,
+        });
+      }
+      if (url.endsWith('/commits/mix/pulls')) {
+        return new Response(
+          JSON.stringify([
+            {
+              title: 'KCM-2 Feature B',
+              body: null,
+              html_url: 'https://github.com/org/repo/pull/3',
+              merged_at: '2026-01-01T00:00:00Z',
+              state: 'closed',
+              head: { ref: 'feature-b', repo: { full_name: 'org/repo' } },
+              base: { ref: 'dev' },
+            },
+          ]),
+          { status: 200 }
+        );
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /KCM-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null; title?: string | null }) => {
+      const text = [parts.title, parts.commitMessage].filter(Boolean).join('\n');
+      return [...text.matchAll(pattern)].map((m) => m[0]!.toUpperCase());
+    };
+
+    const keys = await resolveIssueKeysForWorkflowRun('mix', 'test', extractAll, {
+      resolveKeyFromCommitMessage: true,
+      resolveKeysFromRecentCommits: 5,
+      allowRecentCommitScan: true,
+      skipMarker: null,
+    });
+
+    expect(keys).toEqual(['KCM-1', 'KCM-2']);
+  });
+
+  it('uses push payload keys when recent-commit listing fails', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=head')) {
+        return new Response('error', { status: 500 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /KCM-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null }) =>
+      [...(parts.commitMessage ?? '').matchAll(pattern)].map((m) => m[0]!.toUpperCase());
+
+    const keys = await resolveIssueKeysForPush(
+      'head',
+      'test',
+      ['KCM-3 from payload', 'chore: no key'],
+      extractAll,
+      {
+        resolveKeyFromCommitMessage: true,
+        resolveKeysFromRecentCommits: 10,
+        allowRecentCommitScan: true,
+        skipMarker: null,
+      }
+    );
+
+    expect(keys).toEqual(['KCM-3']);
   });
 
   it('defaults to scanning recent commits on push deploys', () => {

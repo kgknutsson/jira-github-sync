@@ -11,6 +11,7 @@
 
 - GitHub API errors when listing PRs for a commit (including transient 500s) are retried and no longer fail the whole job; issue-key lookup falls back to commit messages.
 - Recent-commit scans skip keys from commits or PRs that contain the skip marker; commit messages are checked before PR API calls; deploy-branch name is not used as a fallback while scanning.
+- Fork provenance checks fail closed when PR lookup fails; promotion scans apply skip markers per commit (not event-wide); push payloads are used when commit listing fails.
 
 ## 1.0.6 — 2026-10-19
 

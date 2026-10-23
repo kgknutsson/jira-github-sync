@@ -5,6 +5,7 @@
  */
 import {
   findPullRequestsForCommit,
+  findPullRequestsForCommitBestEffort,
   getCommitMessage,
   getPullRequest,
   isFromSameRepository,
@@ -95,7 +96,7 @@ async function skipTextsForSha(headSha: string, headBranch: string): Promise<str
   const gh = readGitHubAuthFromEnv();
   if (!gh) return texts;
 
-  const prs = await findPullRequestsForCommit(gh, headSha);
+  const prs = await findPullRequestsForCommitBestEffort(gh, headSha);
   for (const pr of prs) {
     texts.push(pr.title, pr.body ?? '', pr.headRef);
   }
@@ -288,7 +289,13 @@ export async function runSyncForContext(
   if (ctx.event === 'workflow_run' || ctx.event === 'check_suite' || ctx.event === 'check_run') {
     const gh = readGitHubAuthFromEnv();
     if (gh) {
-      const prs = await findPullRequestsForCommit(gh, ctx.headSha);
+      let prs;
+      try {
+        prs = await findPullRequestsForCommit(gh, ctx.headSha);
+      } catch (err) {
+        log.info(`Could not verify pull request provenance for ${ctx.headSha.slice(0, 7)}; skipping`, err);
+        return;
+      }
       if (prs.some((pr) => !isFromSameRepository(pr, gh.repository))) {
         log.info(`Skipping ${ctx.event} linked to a fork pull request`);
         return;
@@ -308,7 +315,9 @@ export async function runSyncForContext(
   }
 
   const marker = compiled.options.skipMarker;
-  if (marker) {
+  const perCommitSkipResolution =
+    compiled.options.resolveKeysFromRecentCommits > 0 && allowRecentCommitScanForContext(ctx);
+  if (marker && !perCommitSkipResolution) {
     const texts = await skipTextsForContext(ctx);
     if (texts.some((t) => textContainsSkipMarker(t, marker))) {
       log.info(`Skip marker "${marker}" present; skipping`);

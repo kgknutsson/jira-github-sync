@@ -4,7 +4,7 @@
  * @module actions/issueKeyResolution
  */
 import {
-  findPullRequestsForCommit,
+  findPullRequestsForCommitBestEffort,
   getCommitMessage,
   listRecentCommitsOnBranch,
   readGitHubAuthFromEnv,
@@ -41,6 +41,26 @@ function mergeUnique(into: string[], keys: string[]): string[] {
   return into;
 }
 
+function keysFromPayloadMessages(
+  commitMessages: string[],
+  branch: string,
+  extractAll: (parts: IssueKeyParts) => string[],
+  skipMarker: string | null
+): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const message of commitMessages) {
+    if (skipMarker && textContainsSkipMarker(message, skipMarker)) continue;
+    for (const key of extractAll({ commitMessage: message, branch })) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+  }
+  return keys;
+}
+
 async function keysForCommitSha(
   headSha: string,
   headBranch: string,
@@ -59,22 +79,22 @@ async function keysForCommitSha(
   }
 
   let commitMessage: string | null | undefined = options.knownCommitMessage;
-  if (resolveKeyFromCommitMessage) {
-    if (commitMessage === undefined) {
-      commitMessage = await getCommitMessage(gh, headSha);
-    }
-    if (options.skipMarker && textContainsSkipMarker(commitMessage ?? '', options.skipMarker)) {
-      log.info(`Skip marker in commit ${headSha.slice(0, 7)}; ignoring for issue keys`);
-      return [];
-    }
-    const fromMessage = extractAll({ commitMessage });
-    if (fromMessage.length > 0) {
-      return fromMessage;
-    }
+  if (commitMessage === undefined) {
+    commitMessage = await getCommitMessage(gh, headSha);
   }
 
-  const prs = await findPullRequestsForCommit(gh, headSha);
+  if (options.skipMarker && textContainsSkipMarker(commitMessage ?? '', options.skipMarker)) {
+    log.info(`Skip marker in commit ${headSha.slice(0, 7)}; ignoring for issue keys`);
+    return [];
+  }
+
   const keys: string[] = [];
+  if (resolveKeyFromCommitMessage) {
+    mergeUnique(keys, extractAll({ commitMessage }));
+    if (!collectAll && keys.length > 0) return keys;
+  }
+
+  const prs = await findPullRequestsForCommitBestEffort(gh, headSha);
   for (const pr of prs) {
     const prTexts = [pr.title, pr.body ?? '', pr.headRef];
     if (options.skipMarker && prTexts.some((t) => textContainsSkipMarker(t, options.skipMarker))) {
@@ -99,6 +119,67 @@ async function keysForCommitSha(
   return [];
 }
 
+type ScanResult = { keys: string[]; listFailed: boolean };
+
+async function scanRecentCommitKeys(
+  headSha: string,
+  headBranch: string,
+  extractAll: (parts: IssueKeyParts) => string[],
+  options: ResolveOptions
+): Promise<ScanResult> {
+  const scanOptions = {
+    skipMarker: options.skipMarker,
+    useBranchFallback: false,
+  };
+  const gh = readGitHubAuthFromEnv();
+  if (!gh) {
+    log.info('GITHUB_TOKEN not set; recent-commit issue key scan skipped');
+    return { keys: [], listFailed: true };
+  }
+
+  const { commits, ok } = await listRecentCommitsOnBranch(gh, headSha, {
+    limit: options.resolveKeysFromRecentCommits,
+  });
+  if (!ok) {
+    return { keys: [], listFailed: true };
+  }
+
+  log.info(
+    `Scanning ${commits.length} commit(s) on ${headBranch} for issue keys (limit ${options.resolveKeysFromRecentCommits})`
+  );
+
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const commit of commits) {
+    const fromCommit = await keysForCommitSha(
+      commit.sha,
+      headBranch,
+      extractAll,
+      options.resolveKeyFromCommitMessage,
+      true,
+      { ...scanOptions, knownCommitMessage: commit.message }
+    );
+    for (const key of fromCommit) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+  }
+
+  if (keys.length > 0) return { keys, listFailed: false };
+
+  const headKeys = await keysForCommitSha(
+    headSha,
+    headBranch,
+    extractAll,
+    options.resolveKeyFromCommitMessage,
+    true,
+    scanOptions
+  );
+  return { keys: headKeys, listFailed: false };
+}
+
 /** Resolve issue key(s) for workflow_run (PRs, commit message, branch). */
 export async function resolveIssueKeysForWorkflowRun(
   headSha: string,
@@ -106,59 +187,19 @@ export async function resolveIssueKeysForWorkflowRun(
   extractAll: (parts: IssueKeyParts) => string[],
   options: ResolveOptions
 ): Promise<string[]> {
-  const scanOptions = {
-    skipMarker: options.skipMarker,
-    useBranchFallback: false,
-  };
-
   if (shouldScanRecentCommits(options)) {
-    const gh = readGitHubAuthFromEnv();
-    if (!gh) {
-      log.info('GITHUB_TOKEN not set; recent-commit issue key scan skipped');
+    const { keys, listFailed } = await scanRecentCommitKeys(headSha, headBranch, extractAll, options);
+    if (listFailed) {
       return keysForCommitSha(
         headSha,
         headBranch,
         extractAll,
         options.resolveKeyFromCommitMessage,
         true,
-        { ...scanOptions, useBranchFallback: true }
+        { skipMarker: options.skipMarker, useBranchFallback: true }
       );
     }
-
-    const commits = await listRecentCommitsOnBranch(gh, headSha, {
-      limit: options.resolveKeysFromRecentCommits,
-    });
-    log.info(
-      `Scanning ${commits.length} commit(s) on ${headBranch} for issue keys (limit ${options.resolveKeysFromRecentCommits})`
-    );
-
-    const keys: string[] = [];
-    const seen = new Set<string>();
-    for (const commit of commits) {
-      const fromCommit = await keysForCommitSha(
-        commit.sha,
-        headBranch,
-        extractAll,
-        options.resolveKeyFromCommitMessage,
-        true,
-        { ...scanOptions, knownCommitMessage: commit.message }
-      );
-      for (const key of fromCommit) {
-        if (!seen.has(key)) {
-          seen.add(key);
-          keys.push(key);
-        }
-      }
-    }
-    if (keys.length > 0) return keys;
-    return keysForCommitSha(
-      headSha,
-      headBranch,
-      extractAll,
-      options.resolveKeyFromCommitMessage,
-      true,
-      scanOptions
-    );
+    return keys;
   }
 
   return keysForCommitSha(
@@ -167,7 +208,7 @@ export async function resolveIssueKeysForWorkflowRun(
     extractAll,
     options.resolveKeyFromCommitMessage,
     false,
-    { ...scanOptions, useBranchFallback: true }
+    { skipMarker: options.skipMarker, useBranchFallback: true }
   );
 }
 
@@ -180,7 +221,25 @@ export async function resolveIssueKeysForPush(
   options: ResolveOptions
 ): Promise<string[]> {
   if (shouldScanRecentCommits(options)) {
-    return resolveIssueKeysForWorkflowRun(headSha, branch, extractAll, options);
+    const { keys, listFailed } = await scanRecentCommitKeys(headSha, branch, extractAll, options);
+    if (listFailed) {
+      const fromPayload = keysFromPayloadMessages(
+        commitMessagesFromPayload,
+        branch,
+        extractAll,
+        options.skipMarker
+      );
+      if (fromPayload.length > 0) return fromPayload;
+      return keysForCommitSha(
+        headSha,
+        branch,
+        extractAll,
+        options.resolveKeyFromCommitMessage,
+        true,
+        { skipMarker: options.skipMarker, useBranchFallback: true }
+      );
+    }
+    return keys;
   }
 
   const fromPayload = extractAll({

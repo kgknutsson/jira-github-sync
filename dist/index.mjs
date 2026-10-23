@@ -8939,15 +8939,21 @@ function pullRequestFromApi(pr) {
     ...pr.head.sha ? { headSha: pr.head.sha } : {}
   };
 }
-async function findPullRequestsForCommit(auth, commitSha) {
+async function fetchPullRequestsForCommit(auth, commitSha) {
   const [owner, repo] = auth.repository.split("/");
   if (!owner || !repo) return [];
+  const pulls = await githubApiGet(
+    auth,
+    `/repos/${owner}/${repo}/commits/${commitSha}/pulls`
+  );
+  return pulls.map(pullRequestFromApi);
+}
+async function findPullRequestsForCommit(auth, commitSha) {
+  return fetchPullRequestsForCommit(auth, commitSha);
+}
+async function findPullRequestsForCommitBestEffort(auth, commitSha) {
   try {
-    const pulls = await githubApiGet(
-      auth,
-      `/repos/${owner}/${repo}/commits/${commitSha}/pulls`
-    );
-    return pulls.map(pullRequestFromApi);
+    return await fetchPullRequestsForCommit(auth, commitSha);
   } catch (err) {
     log.info(`Could not list pull requests for commit ${commitSha.slice(0, 7)}`, err);
     return [];
@@ -8990,28 +8996,29 @@ async function getCommitMessage(auth, commitSha) {
 }
 async function listRecentCommitsOnBranch(auth, shaOrBranch, options) {
   const [owner, repo] = auth.repository.split("/");
-  if (!owner || !repo || options.limit <= 0) return [];
-  const out = [];
+  if (!owner || !repo || options.limit <= 0) return { commits: [], ok: true };
+  const commits = [];
   let page = 1;
   const perPage = Math.min(100, options.limit);
   try {
-    while (out.length < options.limit) {
+    while (commits.length < options.limit) {
       const data = await githubApiGet(
         auth,
         `/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(shaOrBranch)}&per_page=${perPage}&page=${page}`
       );
       if (data.length === 0) break;
       for (const item of data) {
-        out.push({ sha: item.sha, message: item.commit?.message ?? "" });
-        if (out.length >= options.limit) return out;
+        commits.push({ sha: item.sha, message: item.commit?.message ?? "" });
+        if (commits.length >= options.limit) return { commits, ok: true };
       }
       if (data.length < perPage) break;
       page += 1;
     }
+    return { commits, ok: true };
   } catch (err) {
     log.info(`Could not list commits on ${shaOrBranch}`, err);
+    return { commits: [], ok: false };
   }
-  return out;
 }
 
 // lib/utils/formatMessage.ts
@@ -9371,27 +9378,39 @@ function mergeUnique(into, keys) {
   }
   return into;
 }
+function keysFromPayloadMessages(commitMessages, branch, extractAll, skipMarker) {
+  const keys = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const message of commitMessages) {
+    if (skipMarker && textContainsSkipMarker(message, skipMarker)) continue;
+    for (const key of extractAll({ commitMessage: message, branch })) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+  }
+  return keys;
+}
 async function keysForCommitSha(headSha, headBranch, extractAll, resolveKeyFromCommitMessage, collectAll, options) {
   const gh = readGitHubAuthFromEnv();
   if (!gh) {
     return options.useBranchFallback ? extractAll({ branch: headBranch }) : [];
   }
   let commitMessage = options.knownCommitMessage;
-  if (resolveKeyFromCommitMessage) {
-    if (commitMessage === void 0) {
-      commitMessage = await getCommitMessage(gh, headSha);
-    }
-    if (options.skipMarker && textContainsSkipMarker(commitMessage ?? "", options.skipMarker)) {
-      log.info(`Skip marker in commit ${headSha.slice(0, 7)}; ignoring for issue keys`);
-      return [];
-    }
-    const fromMessage = extractAll({ commitMessage });
-    if (fromMessage.length > 0) {
-      return fromMessage;
-    }
+  if (commitMessage === void 0) {
+    commitMessage = await getCommitMessage(gh, headSha);
   }
-  const prs = await findPullRequestsForCommit(gh, headSha);
+  if (options.skipMarker && textContainsSkipMarker(commitMessage ?? "", options.skipMarker)) {
+    log.info(`Skip marker in commit ${headSha.slice(0, 7)}; ignoring for issue keys`);
+    return [];
+  }
   const keys = [];
+  if (resolveKeyFromCommitMessage) {
+    mergeUnique(keys, extractAll({ commitMessage }));
+    if (!collectAll && keys.length > 0) return keys;
+  }
+  const prs = await findPullRequestsForCommitBestEffort(gh, headSha);
   for (const pr of prs) {
     const prTexts = [pr.title, pr.body ?? "", pr.headRef];
     if (options.skipMarker && prTexts.some((t) => textContainsSkipMarker(t, options.skipMarker))) {
@@ -9414,57 +9433,68 @@ async function keysForCommitSha(headSha, headBranch, extractAll, resolveKeyFromC
   }
   return [];
 }
-async function resolveIssueKeysForWorkflowRun(headSha, headBranch, extractAll, options) {
+async function scanRecentCommitKeys(headSha, headBranch, extractAll, options) {
   const scanOptions = {
     skipMarker: options.skipMarker,
     useBranchFallback: false
   };
+  const gh = readGitHubAuthFromEnv();
+  if (!gh) {
+    log.info("GITHUB_TOKEN not set; recent-commit issue key scan skipped");
+    return { keys: [], listFailed: true };
+  }
+  const { commits, ok } = await listRecentCommitsOnBranch(gh, headSha, {
+    limit: options.resolveKeysFromRecentCommits
+  });
+  if (!ok) {
+    return { keys: [], listFailed: true };
+  }
+  log.info(
+    `Scanning ${commits.length} commit(s) on ${headBranch} for issue keys (limit ${options.resolveKeysFromRecentCommits})`
+  );
+  const keys = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const commit of commits) {
+    const fromCommit = await keysForCommitSha(
+      commit.sha,
+      headBranch,
+      extractAll,
+      options.resolveKeyFromCommitMessage,
+      true,
+      { ...scanOptions, knownCommitMessage: commit.message }
+    );
+    for (const key of fromCommit) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+  }
+  if (keys.length > 0) return { keys, listFailed: false };
+  const headKeys = await keysForCommitSha(
+    headSha,
+    headBranch,
+    extractAll,
+    options.resolveKeyFromCommitMessage,
+    true,
+    scanOptions
+  );
+  return { keys: headKeys, listFailed: false };
+}
+async function resolveIssueKeysForWorkflowRun(headSha, headBranch, extractAll, options) {
   if (shouldScanRecentCommits(options)) {
-    const gh = readGitHubAuthFromEnv();
-    if (!gh) {
-      log.info("GITHUB_TOKEN not set; recent-commit issue key scan skipped");
+    const { keys, listFailed } = await scanRecentCommitKeys(headSha, headBranch, extractAll, options);
+    if (listFailed) {
       return keysForCommitSha(
         headSha,
         headBranch,
         extractAll,
         options.resolveKeyFromCommitMessage,
         true,
-        { ...scanOptions, useBranchFallback: true }
+        { skipMarker: options.skipMarker, useBranchFallback: true }
       );
     }
-    const commits = await listRecentCommitsOnBranch(gh, headSha, {
-      limit: options.resolveKeysFromRecentCommits
-    });
-    log.info(
-      `Scanning ${commits.length} commit(s) on ${headBranch} for issue keys (limit ${options.resolveKeysFromRecentCommits})`
-    );
-    const keys = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const commit of commits) {
-      const fromCommit = await keysForCommitSha(
-        commit.sha,
-        headBranch,
-        extractAll,
-        options.resolveKeyFromCommitMessage,
-        true,
-        { ...scanOptions, knownCommitMessage: commit.message }
-      );
-      for (const key of fromCommit) {
-        if (!seen.has(key)) {
-          seen.add(key);
-          keys.push(key);
-        }
-      }
-    }
-    if (keys.length > 0) return keys;
-    return keysForCommitSha(
-      headSha,
-      headBranch,
-      extractAll,
-      options.resolveKeyFromCommitMessage,
-      true,
-      scanOptions
-    );
+    return keys;
   }
   return keysForCommitSha(
     headSha,
@@ -9472,12 +9502,30 @@ async function resolveIssueKeysForWorkflowRun(headSha, headBranch, extractAll, o
     extractAll,
     options.resolveKeyFromCommitMessage,
     false,
-    { ...scanOptions, useBranchFallback: true }
+    { skipMarker: options.skipMarker, useBranchFallback: true }
   );
 }
 async function resolveIssueKeysForPush(headSha, branch, commitMessagesFromPayload, extractAll, options) {
   if (shouldScanRecentCommits(options)) {
-    return resolveIssueKeysForWorkflowRun(headSha, branch, extractAll, options);
+    const { keys, listFailed } = await scanRecentCommitKeys(headSha, branch, extractAll, options);
+    if (listFailed) {
+      const fromPayload2 = keysFromPayloadMessages(
+        commitMessagesFromPayload,
+        branch,
+        extractAll,
+        options.skipMarker
+      );
+      if (fromPayload2.length > 0) return fromPayload2;
+      return keysForCommitSha(
+        headSha,
+        branch,
+        extractAll,
+        options.resolveKeyFromCommitMessage,
+        true,
+        { skipMarker: options.skipMarker, useBranchFallback: true }
+      );
+    }
+    return keys;
   }
   const fromPayload = extractAll({
     branch,
@@ -9636,7 +9684,7 @@ async function skipTextsForSha(headSha, headBranch) {
   const texts = [headBranch];
   const gh = readGitHubAuthFromEnv();
   if (!gh) return texts;
-  const prs = await findPullRequestsForCommit(gh, headSha);
+  const prs = await findPullRequestsForCommitBestEffort(gh, headSha);
   for (const pr of prs) {
     texts.push(pr.title, pr.body ?? "", pr.headRef);
   }
@@ -9788,7 +9836,13 @@ async function runSyncForContext(compiled, eventCtx) {
   if (ctx.event === "workflow_run" || ctx.event === "check_suite" || ctx.event === "check_run") {
     const gh = readGitHubAuthFromEnv();
     if (gh) {
-      const prs = await findPullRequestsForCommit(gh, ctx.headSha);
+      let prs;
+      try {
+        prs = await findPullRequestsForCommit(gh, ctx.headSha);
+      } catch (err) {
+        log.info(`Could not verify pull request provenance for ${ctx.headSha.slice(0, 7)}; skipping`, err);
+        return;
+      }
       if (prs.some((pr) => !isFromSameRepository(pr, gh.repository))) {
         log.info(`Skipping ${ctx.event} linked to a fork pull request`);
         return;
@@ -9801,7 +9855,8 @@ async function runSyncForContext(compiled, eventCtx) {
     }
   }
   const marker = compiled.options.skipMarker;
-  if (marker) {
+  const perCommitSkipResolution = compiled.options.resolveKeysFromRecentCommits > 0 && allowRecentCommitScanForContext(ctx);
+  if (marker && !perCommitSkipResolution) {
     const texts = await skipTextsForContext(ctx);
     if (texts.some((t) => textContainsSkipMarker(t, marker))) {
       log.info(`Skip marker "${marker}" present; skipping`);
