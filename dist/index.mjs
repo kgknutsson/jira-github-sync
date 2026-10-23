@@ -9568,6 +9568,7 @@ async function resolveIssueKeysForPush(headSha, branch, commitMessagesFromPayloa
       if (pushCommits.length > 0) {
         return keysFromPushCommits(pushCommits, branch, repository, extractAll, options);
       }
+      if (!await commitProvenanceOk(headSha, repository)) return [];
       return keysForCommitSha(headSha, branch, extractAll, true, true, {
         skipMarker: options.skipMarker,
         useBranchFallback: false
