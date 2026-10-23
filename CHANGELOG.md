@@ -13,6 +13,7 @@
 - Recent-commit scans skip keys from commits or PRs that contain the skip marker; commit messages are checked before PR API calls; deploy-branch name is not used as a fallback while scanning.
 - Fork provenance checks fail closed when PR lookup fails; promotion scans apply skip markers per commit (not event-wide); push payloads are used when commit listing fails.
 - Recent-commit scans verify fork provenance on every commit, not only the event head; push fallbacks run full per-commit PR/skip filtering on webhook commits; push scans always read commit messages even when `resolveKeyFromCommitMessage` is off.
+- Verified PR metadata from provenance checks is reused for skip-marker filtering so a later failed PR lookup cannot resurrect opted-out keys.
 
 ## 1.0.6 — 2026-10-19
 
