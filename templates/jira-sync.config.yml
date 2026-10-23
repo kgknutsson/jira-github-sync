@@ -9,6 +9,7 @@ projectKey: PROJ
 options:
   resolveKeyFromCommitMessage: true # deploy/check runs: also read keys from the head commit
   processAllMatchingIssueKeys: false # true = apply the rule to every key found, not just the first
+  # resolveKeysFromRecentCommits: 100 # default; push/deploy events scan recent commits (0 = head only)
   failOnJiraError: true # fail the job on Jira API errors (missing issues are skipped)
   skipMarker: '[skip-jira]' # skip events whose PR/commit text contains this (keep the quotes)
 

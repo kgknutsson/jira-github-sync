@@ -43,13 +43,16 @@ type Raw = Record<string, unknown>;
 type Report = (path: Path, message: string, level?: 'error' | 'warning') => void;
 
 const TOP_KEYS = ['projectKey', 'options', 'messages', 'deploy', 'rules'];
-const OPTION_TYPES: Record<keyof SyncOptions, 'boolean' | 'string-or-null'> = {
+const OPTION_TYPES: Record<keyof SyncOptions, 'boolean' | 'string-or-null' | 'number' | 'string-list'> = {
   resolveKeyFromCommitMessage: 'boolean',
   processAllMatchingIssueKeys: 'boolean',
+  resolveKeysFromRecentCommits: 'number',
   failOnJiraError: 'boolean',
   skipMarker: 'string-or-null',
   noTransitionMessageId: 'string-or-null',
 };
+
+const MAX_RECENT_COMMITS = 250;
 const DEPLOY_KEYS = ['jobNameRegex', 'branchToEnvironment', 'environmentToJiraStatus'];
 const ACTION_KEYS = ['transitionTo', 'deployToJiraStatus', 'comment'] as const;
 const RULE_KEYS = [
@@ -226,13 +229,30 @@ function readOptions(raw: unknown, messages: Record<string, string>, report: Rep
   for (const [key, type] of Object.entries(OPTION_TYPES)) {
     if (!(key in raw)) continue;
     const value = raw[key];
-    if (type === 'boolean' ? typeof value === 'boolean' : value === null || typeof value === 'string') {
-      writable[key] = value;
-    } else if (type === 'boolean') {
-      report(['options', key], `options.${key} must be true or false`);
-    } else {
-      const hint = Array.isArray(value) ? ` (quote values that start with "[", e.g. '[skip-jira]')` : '';
-      report(['options', key], `options.${key} must be text or null${hint}`);
+    if (type === 'boolean') {
+      if (typeof value === 'boolean') writable[key] = value;
+      else report(['options', key], `options.${key} must be true or false`);
+    } else if (type === 'string-or-null') {
+      if (value === null || typeof value === 'string') writable[key] = value;
+      else {
+        const hint = Array.isArray(value) ? ` (quote values that start with "[", e.g. '[skip-jira]')` : '';
+        report(['options', key], `options.${key} must be text or null${hint}`);
+      }
+    } else if (type === 'number') {
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_RECENT_COMMITS) {
+        writable[key] = value;
+      } else {
+        report(
+          ['options', key],
+          `options.${key} must be an integer from 0 to ${MAX_RECENT_COMMITS}`
+        );
+      }
+    } else if (type === 'string-list') {
+      if (Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length > 0)) {
+        writable[key] = value;
+      } else {
+        report(['options', key], `options.${key} must be a list of branch names`);
+      }
     }
   }
   return options;

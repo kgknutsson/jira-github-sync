@@ -51,7 +51,7 @@ Copy [templates/jira-sync.config.yml](../templates/jira-sync.config.yml) to `.gi
 Locally (Node 20+):
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.5.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.7.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 ```
 
 Use the release your workflow runs. npx caches each URL, so a moving tag like `v1` would keep running the first version it downloaded.

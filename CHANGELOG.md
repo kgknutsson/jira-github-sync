@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.7 — 2026-10-23
+
+### Added
+
+- Push-triggered deploys, `push`, deployment, and check events default to scanning up to **100** recent commits (`options.resolveKeysFromRecentCommits`, max 250, `0` disables) so branch promotions move every ticket whose key appears on those commits or their linked PRs.
+- Job log lists resolved issue keys and a short sync summary (rules applied vs skipped).
+
+### Fixed
+
+- GitHub API errors when listing PRs for a commit (including transient 500s) are retried and no longer fail the whole job; issue-key lookup falls back to commit messages.
+- Recent-commit scans skip keys from commits or PRs that contain the skip marker; commit messages are checked before PR API calls; deploy-branch name is not used as a fallback while scanning.
+
 ## 1.0.6 — 2026-10-19
 
 ### Fixed

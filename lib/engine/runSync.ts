@@ -18,7 +18,10 @@ import {
   readJiraConfigFromEnv,
 } from '../adapters/jira/client';
 import { executeAction } from '../actions/executeAction';
-import { resolveIssueKeysForWorkflowRun } from '../actions/deployAction';
+import {
+  resolveIssueKeysForPush,
+  resolveIssueKeysForWorkflowRun,
+} from '../actions/issueKeyResolution';
 import type { CompiledSyncConfig } from '../config/compileConfig';
 import { createIssueKeyExtractor, textContainsSkipMarker } from '../utils/issueKey';
 import { log } from '../utils/logger';
@@ -136,11 +139,28 @@ async function skipTextsForContext(ctx: SyncEventContext): Promise<string[]> {
   }
 }
 
+function issueKeyResolveOptions(compiled: CompiledSyncConfig, allowRecentCommitScan: boolean) {
+  return {
+    resolveKeyFromCommitMessage: compiled.options.resolveKeyFromCommitMessage,
+    resolveKeysFromRecentCommits: compiled.options.resolveKeysFromRecentCommits,
+    allowRecentCommitScan,
+    skipMarker: compiled.options.skipMarker,
+  };
+}
+
+function allowRecentCommitScanForContext(ctx: SyncEventContext): boolean {
+  if (ctx.event === 'push' || ctx.event === 'deployment_status') return true;
+  if (ctx.event === 'check_suite' || ctx.event === 'check_run') return true;
+  if (ctx.event === 'workflow_run') return ctx.runEvent === 'push';
+  return false;
+}
+
 async function resolveIssueKeys(
   compiled: CompiledSyncConfig,
   ctx: SyncEventContext
 ): Promise<string[]> {
   const keyExtractor = createIssueKeyExtractor(compiled.issueKeyPattern);
+  const allowRecent = allowRecentCommitScanForContext(ctx);
 
   if (
     ctx.event === 'workflow_run' ||
@@ -156,16 +176,19 @@ async function resolveIssueKeys(
       ctx.headSha,
       branch,
       (parts) => keyExtractor.extractAll(parts),
-      { resolveKeyFromCommitMessage: compiled.options.resolveKeyFromCommitMessage }
+      issueKeyResolveOptions(compiled, allowRecent)
     );
   }
 
   if (ctx.event === 'push') {
     const branch = ctx.ref.replace(/^refs\/heads\//, '');
-    return keyExtractor.extractAll({
+    return resolveIssueKeysForPush(
+      ctx.headSha,
       branch,
-      commitMessage: ctx.commitMessages.join('\n'),
-    });
+      ctx.commitMessages,
+      (parts) => keyExtractor.extractAll(parts),
+      issueKeyResolveOptions(compiled, allowRecent)
+    );
   }
 
   if (ctx.event === 'issue_comment') {
@@ -206,14 +229,14 @@ async function syncOneIssue(
   ctx: SyncEventContext,
   jira: NonNullable<ReturnType<typeof readJiraConfigFromEnv>>,
   issueKey: string
-): Promise<void> {
+): Promise<boolean> {
   let jiraStatus: string | null;
   try {
     jiraStatus = await getIssueStatusName(jira, issueKey);
   } catch (err) {
     if (err instanceof JiraIssueNotFoundError) {
       log.annotate('warning', `${issueKey} not updated: Jira answered 404. ${await explainIssueNotFound(jira, issueKey)}`);
-      return;
+      return false;
     }
     throw err;
   }
@@ -221,7 +244,7 @@ async function syncOneIssue(
   const rule = findMatchingRule(compiled.built, ctx, jiraStatus);
   if (!rule) {
     log.info(`No rule matched (${ctx.event}) for ${issueKey}`);
-    return;
+    return false;
   }
 
   log.info(`Rule: ${rule.name} [${rule.id}] → ${issueKey}`);
@@ -232,6 +255,7 @@ async function syncOneIssue(
     event: ctx,
     jiraStatus,
   });
+  return true;
 }
 
 /** Entry for one parsed webhook: may update zero or more Jira issues. */
@@ -300,9 +324,16 @@ export async function runSyncForContext(
   }
 
   let keysToProcess = issueKeys;
-  if (!compiled.options.processAllMatchingIssueKeys && keysToProcess.length > 1) {
+  const processAll =
+    compiled.options.processAllMatchingIssueKeys ||
+    (compiled.options.resolveKeysFromRecentCommits > 0 && allowRecentCommitScanForContext(ctx));
+  if (!processAll && keysToProcess.length > 1) {
     keysToProcess = [keysToProcess[0]!];
   }
+
+  log.info(
+    `Issue keys for ${ctx.event} (${keysToProcess.length}${keysToProcess.length !== issueKeys.length ? ` of ${issueKeys.length}` : ''}): ${keysToProcess.join(', ')}`
+  );
 
   const jira = readJiraConfigFromEnv();
   if (!jira) {
@@ -314,16 +345,25 @@ export async function runSyncForContext(
     return;
   }
 
+  let matched = 0;
+  let noRule = 0;
+  let failed = 0;
+
   for (const issueKey of keysToProcess) {
     try {
-      await syncOneIssue(compiled, ctx, jira, issueKey);
+      if (await syncOneIssue(compiled, ctx, jira, issueKey)) matched += 1;
+      else noRule += 1;
     } catch (err) {
       if (err instanceof JiraIssueNotFoundError) {
         log.info(`Issue ${issueKey} not found; skipping`);
+        noRule += 1;
         continue;
       }
+      failed += 1;
       log.error(`Jira sync failed for ${issueKey}`, err);
       if (compiled.options.failOnJiraError) throw err;
     }
   }
+
+  log.info(`Sync summary: ${matched} rule(s) applied, ${noRule} skipped (no rule/status), ${failed} failed`);
 }

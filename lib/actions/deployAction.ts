@@ -4,12 +4,7 @@
  * @module actions/deployAction
  */
 import { transitionIssueToStatus } from '../adapters/jira/client';
-import {
-  findPullRequestsForCommit,
-  getCommitMessage,
-  listWorkflowRunJobs,
-  readGitHubAuthFromEnv,
-} from '../adapters/github/api';
+import { listWorkflowRunJobs, readGitHubAuthFromEnv } from '../adapters/github/api';
 import { actionTemplateVars } from '../utils/actionTemplateVars';
 import { parseDeployEnvironment } from '../utils/deployEnvironment';
 import { formatMessage } from '../utils/formatMessage';
@@ -110,45 +105,4 @@ export async function runDeployAction(
   }
 
   return 'skipped';
-}
-
-type IssueKeyParts = {
-  title?: string | null;
-  branch?: string | null;
-  body?: string | null;
-  commitMessage?: string | null;
-};
-
-/** Resolve issue key(s) for workflow_run (PRs, commit message, branch). */
-export async function resolveIssueKeysForWorkflowRun(
-  headSha: string,
-  headBranch: string,
-  extractAll: (parts: IssueKeyParts) => string[],
-  options: { resolveKeyFromCommitMessage: boolean }
-): Promise<string[]> {
-  const parts: IssueKeyParts = { branch: headBranch };
-  const gh = readGitHubAuthFromEnv();
-
-  if (gh) {
-    const prs = await findPullRequestsForCommit(gh, headSha);
-    for (const pr of prs) {
-      parts.title = pr.title;
-      parts.body = pr.body;
-      parts.branch = pr.headRef;
-      const fromPr = extractAll(parts);
-      if (fromPr.length > 0) return fromPr;
-    }
-
-    if (options.resolveKeyFromCommitMessage) {
-      parts.commitMessage = await getCommitMessage(gh, headSha);
-      const fromCommit = extractAll({
-        title: parts.title,
-        body: parts.body,
-        commitMessage: parts.commitMessage,
-      });
-      if (fromCommit.length > 0) return fromCommit;
-    }
-  }
-
-  return extractAll({ branch: headBranch });
 }

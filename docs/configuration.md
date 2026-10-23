@@ -28,6 +28,7 @@ Every run validates the file and fails with an annotation on the offending line 
 | ------ | ------- | ------- |
 | `resolveKeyFromCommitMessage` | `true` | On `workflow_run`, check and deployment events, also read issue keys from the head commit message |
 | `processAllMatchingIssueKeys` | `false` | Apply the matched rule to every issue key found, not just the first |
+| `resolveKeysFromRecentCommits` | `100` | On push-triggered deploys, `push`, deployment, and check events (not PR `workflow_run`s), scan up to this many recent commits (linked PR title/body and commit message). Set `0` to only use the head commit |
 | `failOnJiraError` | `true` | Fail the job on Jira API errors (issues that do not exist are always skipped) |
 | `skipMarker` | `'[skip-jira]'` | Skip events whose PR, commit or comment text contains this (case-insensitive); `null` disables. Keep the quotes: unquoted `[skip-jira]` is a YAML list |
 | `noTransitionMessageId` | `noTransition` if that message exists | Message posted when Jira has no transition to a rule's target status; `null` posts nothing (only if the rule has `commentOnIssue: true`) |
@@ -307,12 +308,12 @@ Issue keys come from the merge group's head commit message, which carries the qu
 
 ## Issue keys and opt-out
 
-Keys look like `PROJ-123`. Matching is case-insensitive, and a key may sit next to any non-alphanumeric character (`feature/PROJ-1`, `PROJ-1_fix`). By default only the first key found is used (`processAllMatchingIssueKeys`).
+Keys look like `PROJ-123`. Matching is case-insensitive, and a key may sit next to any non-alphanumeric character (`feature/PROJ-1`, `PROJ-1_fix`). By default only the first key found is used (`processAllMatchingIssueKeys`). When `resolveKeysFromRecentCommits` is set on a push deploy, every key found in the scanned commits is updated (same as turning on `processAllMatchingIssueKeys` for that event).
 
 | Event | Where keys are read, in order |
 | ----- | ----------------------------- |
 | `pull_request`, `pull_request_review` | PR title → body → branch |
-| `workflow_run`, `check_suite`, `check_run`, `deployment_status` | linked PR (title, body, branch) → head commit message → branch |
+| `workflow_run`, `check_suite`, `check_run`, `deployment_status` | recent commits (push-style events, default 100) or linked PR → commit message → branch |
 | `issue_comment` | comment, plus the PR title, body and branch on PR comments |
 | `push` | commit messages → branch |
 | `release` | release name → tag |
@@ -332,6 +333,6 @@ Before syncing, the action compares the workflow file that runs it with your rul
 It also fails when a `deployToJiraStatus` rule has no usable `deploy` map. Run it with `validate-only: true`, or locally:
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.5.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.7.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 # add --preflight with JIRA_BASE_URL, JIRA_USER_EMAIL and JIRA_API_TOKEN set to check status names in Jira
 ```

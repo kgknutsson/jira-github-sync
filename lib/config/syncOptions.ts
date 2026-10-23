@@ -28,6 +28,11 @@ export type SyncOptions = {
    */
   processAllMatchingIssueKeys: boolean;
   /**
+   * On push-triggered deploys, `push`, and deployment events, walk up to this many recent commits
+   * reachable from the head SHA and collect issue keys from linked PRs and messages. `0` disables.
+   */
+  resolveKeysFromRecentCommits: number;
+  /**
    * Fail the GitHub Actions job if Jira API returns an error (recommended `true` in CI).
    */
   failOnJiraError: boolean;
@@ -47,6 +52,7 @@ export type SyncOptions = {
 export const DEFAULT_SYNC_OPTIONS: SyncOptions = {
   resolveKeyFromCommitMessage: true,
   processAllMatchingIssueKeys: false,
+  resolveKeysFromRecentCommits: 100,
   failOnJiraError: true,
   skipMarker: '[skip-jira]',
   noTransitionMessageId: 'noTransition',
