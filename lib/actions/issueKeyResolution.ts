@@ -43,7 +43,6 @@ function mergeUnique(into: string[], keys: string[]): string[] {
 
 function keysFromPayloadMessages(
   commitMessages: string[],
-  branch: string,
   extractAll: (parts: IssueKeyParts) => string[],
   skipMarker: string | null
 ): string[] {
@@ -51,7 +50,7 @@ function keysFromPayloadMessages(
   const seen = new Set<string>();
   for (const message of commitMessages) {
     if (skipMarker && textContainsSkipMarker(message, skipMarker)) continue;
-    for (const key of extractAll({ commitMessage: message, branch })) {
+    for (const key of extractAll({ commitMessage: message })) {
       if (!seen.has(key)) {
         seen.add(key);
         keys.push(key);
@@ -88,19 +87,24 @@ async function keysForCommitSha(
     return [];
   }
 
+  const prs = await findPullRequestsForCommitBestEffort(gh, headSha);
+  if (
+    options.skipMarker &&
+    prs.some((pr) =>
+      [pr.title, pr.body ?? '', pr.headRef].some((t) => textContainsSkipMarker(t, options.skipMarker))
+    )
+  ) {
+    log.info(`Skip marker on a PR linked to ${headSha.slice(0, 7)}; ignoring commit for issue keys`);
+    return [];
+  }
+
   const keys: string[] = [];
   if (resolveKeyFromCommitMessage) {
     mergeUnique(keys, extractAll({ commitMessage }));
     if (!collectAll && keys.length > 0) return keys;
   }
 
-  const prs = await findPullRequestsForCommitBestEffort(gh, headSha);
   for (const pr of prs) {
-    const prTexts = [pr.title, pr.body ?? '', pr.headRef];
-    if (options.skipMarker && prTexts.some((t) => textContainsSkipMarker(t, options.skipMarker))) {
-      log.info(`Skip marker on PR linked to ${headSha.slice(0, 7)}; ignoring that PR for issue keys`);
-      continue;
-    }
     const fromPr = extractAll({
       title: pr.title,
       body: pr.body,
@@ -196,7 +200,7 @@ export async function resolveIssueKeysForWorkflowRun(
         extractAll,
         options.resolveKeyFromCommitMessage,
         true,
-        { skipMarker: options.skipMarker, useBranchFallback: true }
+        { skipMarker: options.skipMarker, useBranchFallback: false }
       );
     }
     return keys;
@@ -225,7 +229,6 @@ export async function resolveIssueKeysForPush(
     if (listFailed) {
       const fromPayload = keysFromPayloadMessages(
         commitMessagesFromPayload,
-        branch,
         extractAll,
         options.skipMarker
       );
@@ -236,7 +239,7 @@ export async function resolveIssueKeysForPush(
         extractAll,
         options.resolveKeyFromCommitMessage,
         true,
-        { skipMarker: options.skipMarker, useBranchFallback: true }
+        { skipMarker: options.skipMarker, useBranchFallback: false }
       );
     }
     return keys;

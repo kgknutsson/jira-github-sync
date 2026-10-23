@@ -138,6 +138,51 @@ describe('resolveIssueKeysForWorkflowRun', () => {
     expect(keys).toEqual(['KCM-1', 'KCM-2']);
   });
 
+  it('ignores commit message keys when a linked PR contains the skip marker', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=skippr')) {
+        return new Response(
+          JSON.stringify([{ sha: 'skippr', commit: { message: 'KCM-9 ship it' } }]),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith('/commits/skippr/pulls')) {
+        return new Response(
+          JSON.stringify([
+            {
+              title: 'Feature',
+              body: '[skip-jira]',
+              html_url: 'https://github.com/org/repo/pull/9',
+              merged_at: '2026-01-01T00:00:00Z',
+              state: 'closed',
+              head: { ref: 'feature', repo: { full_name: 'org/repo' } },
+              base: { ref: 'dev' },
+            },
+          ]),
+          { status: 200 }
+        );
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /KCM-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null; body?: string | null }) =>
+      [...[parts.commitMessage, parts.body].filter(Boolean).join('\n').matchAll(pattern)].map(
+        (m) => m[0]!.toUpperCase()
+      );
+
+    const keys = await resolveIssueKeysForWorkflowRun('skippr', 'test', extractAll, {
+      resolveKeyFromCommitMessage: true,
+      resolveKeysFromRecentCommits: 5,
+      allowRecentCommitScan: true,
+      skipMarker: '[skip-jira]',
+    });
+
+    expect(keys).toEqual([]);
+  });
+
   it('uses push payload keys when recent-commit listing fails', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
@@ -166,6 +211,38 @@ describe('resolveIssueKeysForWorkflowRun', () => {
     );
 
     expect(keys).toEqual(['KCM-3']);
+  });
+
+  it('does not use branch names when scan listing fails on push', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/commits?sha=head')) {
+        return new Response('error', { status: 500 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pattern = /PROJ-\d+/gi;
+    const extractAll = (parts: { commitMessage?: string | null; branch?: string | null }) =>
+      [...[parts.commitMessage, parts.branch].filter(Boolean).join('\n').matchAll(pattern)].map(
+        (m) => m[0]!.toUpperCase()
+      );
+
+    const keys = await resolveIssueKeysForPush(
+      'head',
+      'PROJ-999-test',
+      ['PROJ-1 fix'],
+      extractAll,
+      {
+        resolveKeyFromCommitMessage: true,
+        resolveKeysFromRecentCommits: 10,
+        allowRecentCommitScan: true,
+        skipMarker: null,
+      }
+    );
+
+    expect(keys).toEqual(['PROJ-1']);
   });
 
   it('defaults to scanning recent commits on push deploys', () => {
