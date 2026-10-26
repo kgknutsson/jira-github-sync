@@ -8,8 +8,9 @@
  */
 import { parse as parseYaml } from 'yaml';
 
+import { ruleAllowsComments } from '../actions/ruleComments';
 import { DEPLOY_FAIL_CONCLUSIONS } from '../config/catalog';
-import type { BuiltSyncConfig, GitHubEventKind } from '../config/types';
+import type { BuiltSyncConfig, GitHubEventKind, RuleStep } from '../config/types';
 
 /** One audit result; errors stop the action, warnings are annotations only. */
 export type AuditFinding = { level: 'error' | 'warning'; message: string };
@@ -41,6 +42,53 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Capture-group count of a regex source (the appended `|` makes it match the empty string). */
 function captureGroupCount(source: string): number {
   return new RegExp(`${source}|`).exec('')!.length - 1;
+}
+
+/** Rules that can run on push-triggered deploy workflow_run events (where commit scanning applies). */
+function ruleOnPushWorkflowRun(rule: BuiltSyncConfig['rules'][number]): boolean {
+  if (rule.event !== 'workflow_run') return false;
+  const runEvents = asList(rule.when.runEvent);
+  if (runEvents.length === 0) return true;
+  return runEvents.includes('push');
+}
+
+function transitionOrDeployStep(step: RuleStep): step is Extract<RuleStep, { kind: 'transition' | 'deploy' }> {
+  return step.kind === 'transition' || step.kind === 'deploy';
+}
+
+function auditMultiIssueCommentFanOut(built: BuiltSyncConfig): AuditFinding[] {
+  const findings: AuditFinding[] = [];
+  const scanLimit = built.options.resolveKeysFromRecentCommits;
+  const processAll = built.options.processAllMatchingIssueKeys;
+
+  if (scanLimit > 0) {
+    for (const rule of built.rules) {
+      if (!ruleOnPushWorkflowRun(rule)) continue;
+      const step = rule.then;
+      if (step.kind === 'comment') continue;
+      if (!transitionOrDeployStep(step)) continue;
+      if (ruleAllowsComments(step) && step.commentAfterSuccess) {
+        findings.push({
+          level: 'warning',
+          message: `Rule "${rule.name}" may post commentAfterSuccess on each issue updated by recent-commit scanning (up to ${scanLimit} commits)`,
+        });
+      }
+    }
+  }
+
+  if (processAll) {
+    for (const rule of built.rules) {
+      if (rule.then.kind !== 'comment') continue;
+      if (rule.event === 'pull_request' || rule.event === 'pull_request_review' || rule.event === 'issue_comment') {
+        findings.push({
+          level: 'warning',
+          message: `Rule "${rule.name}" posts a comment for every issue key in the ${rule.event} text (processAllMatchingIssueKeys is enabled)`,
+        });
+      }
+    }
+  }
+
+  return findings;
 }
 
 /** Deploy maps that cannot work (errors) and rule patterns that are legal but risky (warnings). */
@@ -113,6 +161,7 @@ export function auditRules(built: BuiltSyncConfig): AuditFinding[] {
       }
     }
   }
+  findings.push(...auditMultiIssueCommentFanOut(built));
   return findings;
 }
 

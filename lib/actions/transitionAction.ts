@@ -8,6 +8,7 @@ import { actionTemplateVars } from '../utils/actionTemplateVars';
 import { formatMessage } from '../utils/formatMessage';
 import { log } from '../utils/logger';
 import type { TransitionStep } from '../config/types';
+import { commentAllowedForHeadScopedNoise } from './commentScope';
 import { postIssueComment } from './postIssueComment';
 import { runJiraSideEffects } from './jiraSideEffects';
 import type { ActionContext, ActionResult } from './types';
@@ -34,7 +35,7 @@ export async function runTransitionAction(
 
   if (!result.ok && result.reason === 'no_transition') {
     const messageId = step.onNoTransition ?? ctx.compiled.options.noTransitionMessageId;
-    if (messageId) {
+    if (messageId && commentAllowedForHeadScopedNoise(ctx)) {
       await commentWithKey(step, ctx, messageId, {
         currentStatus: result.from,
         targetStatus: result.target,
@@ -45,7 +46,7 @@ export async function runTransitionAction(
   }
 
   if (result.ok && 'skipped' in result && result.skipped) {
-    if (step.commentWhenSkipped) {
+    if (step.commentWhenSkipped && commentAllowedForHeadScopedNoise(ctx)) {
       await commentWithKey(step, ctx, step.commentWhenSkipped, {
         status: step.status,
         targetStatus: step.status,

@@ -55,4 +55,4 @@ Full reference: [docs/configuration.md](https://github.com/kgknutsson/jira-githu
 - [ ] Checkout (`sparse-checkout: .github`) runs before the action
 - [ ] Merged to the default branch (needed for `workflow_run`)
 
-Validate: `npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.8.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml`
+Validate: `npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.9.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml`

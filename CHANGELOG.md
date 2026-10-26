@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.9 — 2026-10-26
+
+### Fixed
+
+- Comment-only rules (for example deploy failed) apply only to issue keys on the **workflow head commit**, not every key from a recent-commit scan. Deploy status transitions still run for all scanned keys.
+- Transition/deploy **`commentWhenSkipped`** and **`onNoTransition`** comments follow the same head-key limit during multi-key commit scans.
+
+### Added
+
+- Config audit **warnings** when `resolveKeysFromRecentCommits` or `processAllMatchingIssueKeys` can fan out **`commentAfterSuccess`** or PR comment rules to many issues.
+
 ## 1.0.8 — 2026-10-23
 
 ### Fixed

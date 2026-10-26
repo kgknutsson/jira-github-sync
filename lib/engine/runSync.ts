@@ -140,11 +140,15 @@ async function skipTextsForContext(ctx: SyncEventContext): Promise<string[]> {
   }
 }
 
-function issueKeyResolveOptions(compiled: CompiledSyncConfig, allowRecentCommitScan: boolean) {
+function issueKeyResolveOptions(
+  compiled: CompiledSyncConfig,
+  allowRecentCommitScan: boolean,
+  headOnly = false
+) {
   return {
     resolveKeyFromCommitMessage: compiled.options.resolveKeyFromCommitMessage,
-    resolveKeysFromRecentCommits: compiled.options.resolveKeysFromRecentCommits,
-    allowRecentCommitScan,
+    resolveKeysFromRecentCommits: headOnly ? 0 : compiled.options.resolveKeysFromRecentCommits,
+    allowRecentCommitScan: headOnly ? false : allowRecentCommitScan,
     skipMarker: compiled.options.skipMarker,
   };
 }
@@ -159,10 +163,11 @@ function allowRecentCommitScanForContext(ctx: SyncEventContext): boolean {
 
 async function resolveIssueKeys(
   compiled: CompiledSyncConfig,
-  ctx: SyncEventContext
+  ctx: SyncEventContext,
+  headOnly = false
 ): Promise<string[]> {
   const keyExtractor = createIssueKeyExtractor(compiled.issueKeyPattern);
-  const allowRecent = allowRecentCommitScanForContext(ctx);
+  const allowRecent = allowRecentCommitScanForContext(ctx) && !headOnly;
 
   if (
     ctx.event === 'workflow_run' ||
@@ -179,7 +184,7 @@ async function resolveIssueKeys(
       branch,
       ctx.repository,
       (parts) => keyExtractor.extractAll(parts),
-      issueKeyResolveOptions(compiled, allowRecent)
+      issueKeyResolveOptions(compiled, allowRecent, headOnly)
     );
   }
 
@@ -192,7 +197,7 @@ async function resolveIssueKeys(
       ctx.commits,
       ctx.repository,
       (parts) => keyExtractor.extractAll(parts),
-      issueKeyResolveOptions(compiled, allowRecent)
+      issueKeyResolveOptions(compiled, allowRecent, headOnly)
     );
   }
 
@@ -233,7 +238,9 @@ async function syncOneIssue(
   compiled: CompiledSyncConfig,
   ctx: SyncEventContext,
   jira: NonNullable<ReturnType<typeof readJiraConfigFromEnv>>,
-  issueKey: string
+  issueKey: string,
+  /** When set, comment-only rules and head-scoped noise comments use these keys only. */
+  commentHeadKeysOnly: Set<string> | null
 ): Promise<boolean> {
   let jiraStatus: string | null;
   try {
@@ -252,6 +259,17 @@ async function syncOneIssue(
     return false;
   }
 
+  if (
+    rule.then.kind === 'comment' &&
+    commentHeadKeysOnly &&
+    !commentHeadKeysOnly.has(issueKey)
+  ) {
+    log.info(
+      `Skipping comment rule "${rule.name}" for ${issueKey} (comments use deploy head keys, not recent-commit scan)`
+    );
+    return false;
+  }
+
   log.info(`Rule: ${rule.name} [${rule.id}] → ${issueKey}`);
   await executeAction(rule.then, {
     jira,
@@ -259,6 +277,7 @@ async function syncOneIssue(
     issueKey,
     event: ctx,
     jiraStatus,
+    commentHeadKeysOnly,
   });
   return true;
 }
@@ -348,6 +367,19 @@ export async function runSyncForContext(
     `Issue keys for ${ctx.event} (${keysToProcess.length}${keysToProcess.length !== issueKeys.length ? ` of ${issueKeys.length}` : ''}): ${keysToProcess.join(', ')}`
   );
 
+  let commentHeadKeysOnly: Set<string> | null = null;
+  if (
+    perCommitSkipResolution &&
+    keysToProcess.length > 1 &&
+    compiled.options.resolveKeysFromRecentCommits > 0
+  ) {
+    const headKeys = await resolveIssueKeys(compiled, ctx, true);
+    commentHeadKeysOnly = new Set(headKeys);
+    if (headKeys.length > 0) {
+      log.info(`Jira comments (comment rules and skipped/no-transition) use head key(s): ${headKeys.join(', ')}`);
+    }
+  }
+
   const jira = readJiraConfigFromEnv();
   if (!jira) {
     log.annotate(
@@ -364,7 +396,7 @@ export async function runSyncForContext(
 
   for (const issueKey of keysToProcess) {
     try {
-      if (await syncOneIssue(compiled, ctx, jira, issueKey)) matched += 1;
+      if (await syncOneIssue(compiled, ctx, jira, issueKey, commentHeadKeysOnly)) matched += 1;
       else noRule += 1;
     } catch (err) {
       if (err instanceof JiraIssueNotFoundError) {

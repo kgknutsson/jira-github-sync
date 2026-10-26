@@ -14,6 +14,11 @@ export type ActionContext = {
   issueKey: string;
   event: SyncEventContext;
   jiraStatus: string | null;
+  /**
+   * When set, comment-only rules and transition/deploy `commentWhenSkipped` / `onNoTransition`
+   * comments run only for these keys (workflow head), not every key from a commit scan.
+   */
+  commentHeadKeysOnly?: Set<string> | null;
 };
 
 /** Handler outcome (logged; does not always fail the Actions job). */

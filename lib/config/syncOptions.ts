@@ -28,8 +28,9 @@ export type SyncOptions = {
    */
   processAllMatchingIssueKeys: boolean;
   /**
-   * On push-triggered deploys, `push`, and deployment events, walk up to this many recent commits
+   * On deploy/check `workflow_run` and related events, walk up to this many recent commits
    * reachable from the head SHA and collect issue keys from linked PRs and messages. `0` disables.
+   * Comment-only rules still use keys from the head commit only so failures do not spam every scanned ticket.
    */
   resolveKeysFromRecentCommits: number;
   /**

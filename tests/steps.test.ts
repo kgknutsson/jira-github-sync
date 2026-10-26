@@ -364,9 +364,139 @@ describe('Jira credentials', () => {
   });
 });
 
+describe('comment-only rules with recent-commit scan', () => {
+  const compiled = compileYaml(
+    'projectKey: PROJ',
+    "messages: { deployFailed: 'Deploy failed {url}' }",
+    'options:',
+    '  resolveKeysFromRecentCommits: 10',
+    'rules:',
+    '  - name: Deploy failed → comment',
+    '    when: workflow_run',
+    '    if: { workflow: Deploy App, runEvent: push, conclusion: failure }',
+    '    comment: deployFailed'
+  );
+  const deployFailed: WorkflowRunContext = {
+    event: 'workflow_run',
+    workflowName: 'Deploy App',
+    runEvent: 'push',
+    conclusion: 'failure',
+    headSha: 'head1',
+    headBranch: 'test',
+    runUrl: 'https://github.com/org/repo/actions/runs/99',
+    runId: 99,
+    repository: 'org/repo',
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('GITHUB_TOKEN', 'gh-token');
+    vi.stubEnv('GITHUB_REPOSITORY', 'org/repo');
+    vi.stubEnv('JIRA_BASE_URL', JIRA);
+    vi.stubEnv('JIRA_USER_EMAIL', 'bot@example.com');
+    vi.stubEnv('JIRA_API_TOKEN', 'token');
+  });
+
+  it('posts deploy-failed comments only for head commit keys, not every scanned key', async () => {
+    const calls = stubFetch({
+      'GET https://api.github.com/repos/org/repo/commits?sha=head1&per_page=10&page=1': [
+        { sha: 'head1', commit: { message: 'PROJ-1 deploy head' } },
+        { sha: 'old2', commit: { message: 'PROJ-2 older' } },
+        { sha: 'old3', commit: { message: 'PROJ-3 older' } },
+      ],
+      'GET https://api.github.com/repos/org/repo/commits/head1': {
+        commit: { message: 'PROJ-1 deploy head' },
+      },
+      'GET https://api.github.com/repos/org/repo/commits/head1/pulls': [],
+      'GET https://api.github.com/repos/org/repo/commits/old2/pulls': [],
+      'GET https://api.github.com/repos/org/repo/commits/old3/pulls': [],
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-1?fields=status`]: { fields: { status: { name: 'In Review' } } },
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-2?fields=status`]: { fields: { status: { name: 'In Review' } } },
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-3?fields=status`]: { fields: { status: { name: 'In Review' } } },
+      [`POST ${JIRA}/rest/api/3/issue/PROJ-1/comment`]: {},
+    });
+
+    await runSyncForContext(compiled, deployFailed);
+
+    const commentPosts = calls.filter((c) => c.method === 'POST' && c.url.endsWith('/comment'));
+    expect(commentPosts).toHaveLength(1);
+    expect(commentPosts[0]!.url).toContain('PROJ-1');
+  });
+
+  it('does not post commentWhenSkipped on every scanned key during deploy', async () => {
+    const compiled = compileYaml(
+      'projectKey: PROJ',
+      "messages: { alreadyThere: 'Already deployed {url}' }",
+      'options:',
+      '  resolveKeysFromRecentCommits: 10',
+      'deploy:',
+      '  branchToEnvironment: { test: test }',
+      '  environmentToJiraStatus: { test: Deployed (Test) }',
+      'rules:',
+      '  - name: Deploy success',
+      '    when: workflow_run',
+      '    if: { workflow: Deploy App, runEvent: push, conclusion: success }',
+      '    deployToJiraStatus: true',
+      '    commentOnIssue: true',
+      '    commentWhenSkipped: alreadyThere'
+    );
+    const deployOk: WorkflowRunContext = {
+      event: 'workflow_run',
+      workflowName: 'Deploy App',
+      runEvent: 'push',
+      conclusion: 'success',
+      headSha: 'head1',
+      headBranch: 'test',
+      runUrl: 'https://github.com/org/repo/actions/runs/99',
+      runId: 99,
+      repository: 'org/repo',
+    };
+
+    const calls = stubFetch({
+      'GET https://api.github.com/repos/org/repo/commits?sha=head1&per_page=10&page=1': [
+        { sha: 'head1', commit: { message: 'PROJ-1 deploy head' } },
+        { sha: 'old2', commit: { message: 'PROJ-2 older' } },
+      ],
+      'GET https://api.github.com/repos/org/repo/commits/head1': {
+        commit: { message: 'PROJ-1 deploy head' },
+      },
+      'GET https://api.github.com/repos/org/repo/commits/head1/pulls': [],
+      'GET https://api.github.com/repos/org/repo/commits/old2/pulls': [],
+      'GET https://api.github.com/repos/org/repo/actions/runs/99/jobs?per_page=100': {
+        jobs: [{ name: 'Build and Deploy (test)' }],
+      },
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-1?fields=status`]: {
+        fields: { status: { name: 'Deployed (Test)' } },
+      },
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-2?fields=status`]: {
+        fields: { status: { name: 'Deployed (Test)' } },
+      },
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-1/transitions`]: { transitions: [] },
+      [`GET ${JIRA}/rest/api/3/issue/PROJ-2/transitions`]: { transitions: [] },
+    });
+
+    await runSyncForContext(compiled, deployOk);
+
+    const commentPosts = calls.filter((c) => c.method === 'POST' && c.url.endsWith('/comment'));
+    expect(commentPosts).toHaveLength(1);
+    expect(commentPosts[0]!.url).toContain('PROJ-1');
+  });
+});
+
 describe('explainIssueNotFound', () => {
   function myselfAnswers(status: number, contentType: string) {
-    vi.stubGlobal('fetch', async () => new Response('{}', { status, headers: { 'Content-Type': contentType } }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.endsWith('/myself')) {
+          return new Response(status === 200 ? '{}' : 'err', {
+            status,
+            headers: { 'Content-Type': contentType },
+          });
+        }
+        return new Response('not found', { status: 404 });
+      })
+    );
   }
 
   it('blames the login when /myself is rejected', async () => {

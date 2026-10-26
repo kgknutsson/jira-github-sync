@@ -10,6 +10,7 @@ import { parseDeployEnvironment } from '../utils/deployEnvironment';
 import { formatMessage } from '../utils/formatMessage';
 import { log } from '../utils/logger';
 import type { DeployTransitionStep } from '../config/types';
+import { commentAllowedForHeadScopedNoise } from './commentScope';
 import { postIssueComment } from './postIssueComment';
 import { runJiraSideEffects } from './jiraSideEffects';
 import type { ActionContext, ActionResult } from './types';
@@ -77,7 +78,7 @@ export async function runDeployAction(
 
   if (!result.ok && result.reason === 'no_transition') {
     const messageId = step.onNoTransition ?? ctx.compiled.options.noTransitionMessageId;
-    if (messageId) {
+    if (messageId && commentAllowedForHeadScopedNoise(ctx)) {
       await commentWithKey(step, ctx, messageId, {
         ...vars,
         currentStatus: result.from,
@@ -88,7 +89,7 @@ export async function runDeployAction(
   }
 
   if (result.ok && 'skipped' in result && result.skipped) {
-    if (step.commentWhenSkipped) {
+    if (step.commentWhenSkipped && commentAllowedForHeadScopedNoise(ctx)) {
       await commentWithKey(step, ctx, step.commentWhenSkipped, vars);
     }
     log.info(`${ctx.issueKey}: deploy ${deployEnv} (already ${target})`);

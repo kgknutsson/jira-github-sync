@@ -28,7 +28,7 @@ Every run validates the file and fails with an annotation on the offending line 
 | ------ | ------- | ------- |
 | `resolveKeyFromCommitMessage` | `true` | On `workflow_run`, check and deployment events, also read issue keys from the head commit message |
 | `processAllMatchingIssueKeys` | `false` | Apply the matched rule to every issue key found, not just the first |
-| `resolveKeysFromRecentCommits` | `100` | On push-triggered deploys, `push`, deployment, and check events (not PR `workflow_run`s), scan up to this many recent commits (linked PR title/body and commit message). Set `0` to only use the head commit |
+| `resolveKeysFromRecentCommits` | `100` | On deploy/check `workflow_run` and related events, scan up to this many recent commits for **transitions and deploy status**. Set `0` to only use the head commit. **Comments** from comment-only rules and from `commentWhenSkipped` / `onNoTransition` use only keys on the **workflow head commit** when the scan matches multiple issues; `commentAfterSuccess` still posts per issue that transitions. The action audit warns when rules may fan out comments or remote links |
 | `failOnJiraError` | `true` | Fail the job on Jira API errors (issues that do not exist are always skipped) |
 | `skipMarker` | `'[skip-jira]'` | Skip events whose PR, commit or comment text contains this (case-insensitive); `null` disables. Keep the quotes: unquoted `[skip-jira]` is a YAML list |
 | `noTransitionMessageId` | `noTransition` if that message exists | Message posted when Jira has no transition to a rule's target status; `null` posts nothing (only if the rule has `commentOnIssue: true`) |
@@ -308,7 +308,7 @@ Issue keys come from the merge group's head commit message, which carries the qu
 
 ## Issue keys and opt-out
 
-Keys look like `PROJ-123`. Matching is case-insensitive, and a key may sit next to any non-alphanumeric character (`feature/PROJ-1`, `PROJ-1_fix`). By default only the first key found is used (`processAllMatchingIssueKeys`). When `resolveKeysFromRecentCommits` is set on a push deploy, every key found in the scanned commits is updated (same as turning on `processAllMatchingIssueKeys` for that event).
+Keys look like `PROJ-123`. Matching is case-insensitive, and a key may sit next to any non-alphanumeric character (`feature/PROJ-1`, `PROJ-1_fix`). By default only the first key found is used (`processAllMatchingIssueKeys`). When `resolveKeysFromRecentCommits` is set on a deploy-style `workflow_run`, every key found in the scanned commits can receive **transitions** and **deploy status** updates (same as turning on `processAllMatchingIssueKeys` for that event). Most **comments** on that event are limited to keys on the run's head commit; **`commentAfterSuccess`** still posts for each issue that transitions (see the action audit warnings). **`linkGithub`** and custom fields run per matching issue as well.
 
 | Event | Where keys are read, in order |
 | ----- | ----------------------------- |
@@ -333,6 +333,6 @@ Before syncing, the action compares the workflow file that runs it with your rul
 It also fails when a `deployToJiraStatus` rule has no usable `deploy` map. Run it with `validate-only: true`, or locally:
 
 ```bash
-npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.8.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
+npx -y https://github.com/kgknutsson/jira-github-sync/archive/refs/tags/v1.0.9.tar.gz validate .github/jira-sync.config.yml --workflow .github/workflows/jira-sync.yml
 # add --preflight with JIRA_BASE_URL, JIRA_USER_EMAIL and JIRA_API_TOKEN set to check status names in Jira
 ```

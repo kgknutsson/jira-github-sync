@@ -7710,6 +7710,12 @@ async function validateJiraStringsAgainstProject(config, built) {
 // lib/audit/workflowAudit.ts
 var import_yaml = __toESM(require_dist(), 1);
 
+// lib/actions/ruleComments.ts
+function ruleAllowsComments(step) {
+  if (step.kind === "comment") return step.commentOnIssue !== false;
+  return step.commentOnIssue === true;
+}
+
 // lib/config/catalog.ts
 var EVENTS = {
   pull_request: "Pull request opened, updated, marked ready, converted to draft, closed, \u2026",
@@ -7910,6 +7916,46 @@ function isRecord(value) {
 function captureGroupCount(source) {
   return new RegExp(`${source}|`).exec("").length - 1;
 }
+function ruleOnPushWorkflowRun(rule) {
+  if (rule.event !== "workflow_run") return false;
+  const runEvents = asList(rule.when.runEvent);
+  if (runEvents.length === 0) return true;
+  return runEvents.includes("push");
+}
+function transitionOrDeployStep(step) {
+  return step.kind === "transition" || step.kind === "deploy";
+}
+function auditMultiIssueCommentFanOut(built) {
+  const findings = [];
+  const scanLimit = built.options.resolveKeysFromRecentCommits;
+  const processAll = built.options.processAllMatchingIssueKeys;
+  if (scanLimit > 0) {
+    for (const rule of built.rules) {
+      if (!ruleOnPushWorkflowRun(rule)) continue;
+      const step = rule.then;
+      if (step.kind === "comment") continue;
+      if (!transitionOrDeployStep(step)) continue;
+      if (ruleAllowsComments(step) && step.commentAfterSuccess) {
+        findings.push({
+          level: "warning",
+          message: `Rule "${rule.name}" may post commentAfterSuccess on each issue updated by recent-commit scanning (up to ${scanLimit} commits)`
+        });
+      }
+    }
+  }
+  if (processAll) {
+    for (const rule of built.rules) {
+      if (rule.then.kind !== "comment") continue;
+      if (rule.event === "pull_request" || rule.event === "pull_request_review" || rule.event === "issue_comment") {
+        findings.push({
+          level: "warning",
+          message: `Rule "${rule.name}" posts a comment for every issue key in the ${rule.event} text (processAllMatchingIssueKeys is enabled)`
+        });
+      }
+    }
+  }
+  return findings;
+}
 function auditRules(built) {
   const findings = [];
   const { deploy } = built;
@@ -7966,6 +8012,7 @@ function auditRules(built) {
       }
     }
   }
+  findings.push(...auditMultiIssueCommentFanOut(built));
   return findings;
 }
 function triggersOf(on) {
@@ -9119,12 +9166,6 @@ function actionTemplateVars(ctx, issueKey, jiraStatus) {
   }
 }
 
-// lib/actions/ruleComments.ts
-function ruleAllowsComments(step) {
-  if (step.kind === "comment") return step.commentOnIssue !== false;
-  return step.commentOnIssue === true;
-}
-
 // lib/actions/postIssueComment.ts
 async function postIssueComment(ctx, step, text, messageKey) {
   if (!ruleAllowsComments(step)) {
@@ -9199,6 +9240,12 @@ function parseDeployEnvironment(jobs, headBranch, jobNamePattern, branchToEnv, v
   return Object.hasOwn(branchToEnv, branch) ? branchToEnv[branch] : null;
 }
 
+// lib/actions/commentScope.ts
+function commentAllowedForHeadScopedNoise(ctx) {
+  if (!ctx.commentHeadKeysOnly) return true;
+  return ctx.commentHeadKeysOnly.has(ctx.issueKey);
+}
+
 // lib/actions/deployAction.ts
 async function commentWithKey(step, ctx, messageKey, extra) {
   const text = formatMessage(ctx.compiled.messageTemplate(messageKey), {
@@ -9248,7 +9295,7 @@ async function runDeployAction(step, ctx) {
   };
   if (!result.ok && result.reason === "no_transition") {
     const messageId = step.onNoTransition ?? ctx.compiled.options.noTransitionMessageId;
-    if (messageId) {
+    if (messageId && commentAllowedForHeadScopedNoise(ctx)) {
       await commentWithKey(step, ctx, messageId, {
         ...vars,
         currentStatus: result.from,
@@ -9258,7 +9305,7 @@ async function runDeployAction(step, ctx) {
     return "no_transition";
   }
   if (result.ok && "skipped" in result && result.skipped) {
-    if (step.commentWhenSkipped) {
+    if (step.commentWhenSkipped && commentAllowedForHeadScopedNoise(ctx)) {
       await commentWithKey(step, ctx, step.commentWhenSkipped, vars);
     }
     log.info(`${ctx.issueKey}: deploy ${deployEnv} (already ${target})`);
@@ -9287,7 +9334,7 @@ async function runTransitionAction(step, ctx) {
   const result = await transitionIssueToStatus(ctx.jira, ctx.issueKey, step.status, step.via ?? []);
   if (!result.ok && result.reason === "no_transition") {
     const messageId = step.onNoTransition ?? ctx.compiled.options.noTransitionMessageId;
-    if (messageId) {
+    if (messageId && commentAllowedForHeadScopedNoise(ctx)) {
       await commentWithKey2(step, ctx, messageId, {
         currentStatus: result.from,
         targetStatus: result.target
@@ -9297,7 +9344,7 @@ async function runTransitionAction(step, ctx) {
     return "no_transition";
   }
   if (result.ok && "skipped" in result && result.skipped) {
-    if (step.commentWhenSkipped) {
+    if (step.commentWhenSkipped && commentAllowedForHeadScopedNoise(ctx)) {
       await commentWithKey2(step, ctx, step.commentWhenSkipped, {
         status: step.status,
         targetStatus: step.status
@@ -9794,11 +9841,11 @@ async function skipTextsForContext(ctx) {
       return [];
   }
 }
-function issueKeyResolveOptions(compiled, allowRecentCommitScan) {
+function issueKeyResolveOptions(compiled, allowRecentCommitScan, headOnly = false) {
   return {
     resolveKeyFromCommitMessage: compiled.options.resolveKeyFromCommitMessage,
-    resolveKeysFromRecentCommits: compiled.options.resolveKeysFromRecentCommits,
-    allowRecentCommitScan,
+    resolveKeysFromRecentCommits: headOnly ? 0 : compiled.options.resolveKeysFromRecentCommits,
+    allowRecentCommitScan: headOnly ? false : allowRecentCommitScan,
     skipMarker: compiled.options.skipMarker
   };
 }
@@ -9808,9 +9855,9 @@ function allowRecentCommitScanForContext(ctx) {
   if (ctx.event === "workflow_run") return ctx.runEvent === "push";
   return false;
 }
-async function resolveIssueKeys(compiled, ctx) {
+async function resolveIssueKeys(compiled, ctx, headOnly = false) {
   const keyExtractor = createIssueKeyExtractor(compiled.issueKeyPattern);
-  const allowRecent = allowRecentCommitScanForContext(ctx);
+  const allowRecent = allowRecentCommitScanForContext(ctx) && !headOnly;
   if (ctx.event === "workflow_run" || ctx.event === "check_suite" || ctx.event === "check_run" || ctx.event === "deployment_status") {
     const branch = ctx.event === "deployment_status" ? ctx.ref.replace(/^refs\/heads\//, "") : ctx.headBranch;
     return resolveIssueKeysForWorkflowRun(
@@ -9818,7 +9865,7 @@ async function resolveIssueKeys(compiled, ctx) {
       branch,
       ctx.repository,
       (parts) => keyExtractor.extractAll(parts),
-      issueKeyResolveOptions(compiled, allowRecent)
+      issueKeyResolveOptions(compiled, allowRecent, headOnly)
     );
   }
   if (ctx.event === "push") {
@@ -9830,7 +9877,7 @@ async function resolveIssueKeys(compiled, ctx) {
       ctx.commits,
       ctx.repository,
       (parts) => keyExtractor.extractAll(parts),
-      issueKeyResolveOptions(compiled, allowRecent)
+      issueKeyResolveOptions(compiled, allowRecent, headOnly)
     );
   }
   if (ctx.event === "issue_comment") {
@@ -9862,7 +9909,7 @@ ${ctx.pr.body ?? ""}`
   }
   return [];
 }
-async function syncOneIssue(compiled, ctx, jira, issueKey) {
+async function syncOneIssue(compiled, ctx, jira, issueKey, commentHeadKeysOnly) {
   let jiraStatus;
   try {
     jiraStatus = await getIssueStatusName(jira, issueKey);
@@ -9878,13 +9925,20 @@ async function syncOneIssue(compiled, ctx, jira, issueKey) {
     log.info(`No rule matched (${ctx.event}) for ${issueKey}`);
     return false;
   }
+  if (rule.then.kind === "comment" && commentHeadKeysOnly && !commentHeadKeysOnly.has(issueKey)) {
+    log.info(
+      `Skipping comment rule "${rule.name}" for ${issueKey} (comments use deploy head keys, not recent-commit scan)`
+    );
+    return false;
+  }
   log.info(`Rule: ${rule.name} [${rule.id}] \u2192 ${issueKey}`);
   await executeAction(rule.then, {
     jira,
     compiled,
     issueKey,
     event: ctx,
-    jiraStatus
+    jiraStatus,
+    commentHeadKeysOnly
   });
   return true;
 }
@@ -9949,6 +10003,14 @@ async function runSyncForContext(compiled, eventCtx) {
   log.info(
     `Issue keys for ${ctx.event} (${keysToProcess.length}${keysToProcess.length !== issueKeys.length ? ` of ${issueKeys.length}` : ""}): ${keysToProcess.join(", ")}`
   );
+  let commentHeadKeysOnly = null;
+  if (perCommitSkipResolution && keysToProcess.length > 1 && compiled.options.resolveKeysFromRecentCommits > 0) {
+    const headKeys = await resolveIssueKeys(compiled, ctx, true);
+    commentHeadKeysOnly = new Set(headKeys);
+    if (headKeys.length > 0) {
+      log.info(`Jira comments (comment rules and skipped/no-transition) use head key(s): ${headKeys.join(", ")}`);
+    }
+  }
   const jira = readJiraConfigFromEnv();
   if (!jira) {
     log.annotate(
@@ -9962,7 +10024,7 @@ async function runSyncForContext(compiled, eventCtx) {
   let failed = 0;
   for (const issueKey of keysToProcess) {
     try {
-      if (await syncOneIssue(compiled, ctx, jira, issueKey)) matched += 1;
+      if (await syncOneIssue(compiled, ctx, jira, issueKey, commentHeadKeysOnly)) matched += 1;
       else noRule += 1;
     } catch (err) {
       if (err instanceof JiraIssueNotFoundError) {

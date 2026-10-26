@@ -95,4 +95,38 @@ describe('auditRules', () => {
     const risky = { ...sample, rules: [{ ...first!, when: { action: 'edited' } }] };
     expect(messages(auditRules(risky))).toEqual([expect.stringContaining('without prState: open')]);
   });
+
+  it('warns when recent-commit scanning can fan out commentAfterSuccess', () => {
+    const deployRule = sample.rules.find((r) => r.name.startsWith('Deploy success'));
+    const noisy = {
+      ...sample,
+      options: { ...sample.options, resolveKeysFromRecentCommits: 50 },
+      rules: [
+        {
+          ...deployRule!,
+          then: {
+            ...deployRule!.then,
+            commentOnIssue: true,
+            commentAfterSuccess: 'deploySuccess',
+          },
+        },
+      ],
+      messages: { ...sample.messages, deploySuccess: 'Deployed {url}' },
+    };
+    expect(messages(auditRules(noisy))).toEqual([
+      expect.stringContaining('commentAfterSuccess on each issue updated by recent-commit scanning'),
+    ]);
+  });
+
+  it('warns when processAllMatchingIssueKeys fans out PR comment rules', () => {
+    const merged = sample.rules.find((r) => r.name.includes('merged → comment'));
+    const noisy = {
+      ...sample,
+      options: { ...sample.options, processAllMatchingIssueKeys: true },
+      rules: [merged!],
+    };
+    expect(messages(auditRules(noisy))).toEqual([
+      expect.stringContaining('posts a comment for every issue key in the pull_request text'),
+    ]);
+  });
 });
